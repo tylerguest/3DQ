@@ -2,7 +2,7 @@
 
 A real-time 3D visualization application that renders a semi-transparent sphere with randomly distributed points on its surface. The sphere can be rotated interactively using mouse controls.
 
-<img src="./example.gif" width="600" alt="3DQ Visualization"/>
+<img src="./example.gif" width="300" alt="3DQ Visualization"/>
 
 ## Features
 
