@@ -1,5 +1,4 @@
 // compile: g++ 3DQ.cpp -o 3dq -lglfw -lGL -lGLU -lm
-
 #include <GLFW/glfw3.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
@@ -8,7 +7,7 @@
 
 const int WIDTH = 1200;
 const int HEIGHT = 1000;
-const int NUM_POINTS = 1000; // Number of points on the sphere
+const int NUM_POINTS = 1000; 
 
 float lastX = WIDTH / 2.0f;
 float lastY = HEIGHT / 2.0f;
@@ -16,7 +15,7 @@ bool mousePressed = false;
 float yaw = 0.0f;
 float pitch = 0.0f;
 
-std::vector<float> spherePoints; // Stores the coordinates of points on the sphere
+std::vector<float> spherePoints; 
 
 void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
     if (mousePressed) {
@@ -32,7 +31,6 @@ void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
         yaw += xOffset;
         pitch += yOffset;
 
-        // Limit pitch to prevent flipping
         if (pitch > 89.0f) pitch = 89.0f;
         if (pitch < -89.0f) pitch = -89.0f;
     }
@@ -67,34 +65,29 @@ void generateSpherePoints() {
 }
 
 void drawSphereWithDots() {
-    const float dotSize = 4.0f; // Size of the dots
-    const float dotColor[3] = {0.0f, 1.0f, 0.0f}; // Color of the dots (green)
+    const float dotSize = 4.0f; 
+    const float dotColor[3] = {0.0f, 1.0f, 0.0f}; 
 
-    // Enable depth testing
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
 
-    // Render the sphere filled with the desired opacity
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.0f, 1.0f, 1.0f, 0.2f); // Set sphere fill color to white with 20% opacity
+    glColor4f(0.0f, 1.0f, 1.0f, 0.2f); 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     GLUquadric* quad = gluNewQuadric();
-    gluSphere(quad, 1.0f, 30, 30); // Using constants directly for slices and stacks
+    gluSphere(quad, 1.0f, 30, 30); 
     gluDeleteQuadric(quad);
     glDisable(GL_BLEND);
 
-    // Render dots on the sphere's surface
-    glColor3fv(dotColor); // Set dot color to green
+    glColor3fv(dotColor);
     glPointSize(dotSize);
     glBegin(GL_POINTS);
     for (int i = 0; i < NUM_POINTS; ++i) {
-        // Transform the dot's coordinates with the sphere's rotation
         float x = spherePoints[i * 3];
         float y = spherePoints[i * 3 + 1];
         float z = spherePoints[i * 3 + 2];
 
-        // Apply the same rotation to the dot as to the sphere
         float newX = x * cos(pitch * M_PI / 180) + z * sin(pitch * M_PI / 180);
         float newY = y;
         float newZ = -x * sin(pitch * M_PI / 180) + z * cos(pitch * M_PI / 180);
@@ -103,11 +96,10 @@ void drawSphereWithDots() {
         float finalY = newX * sin(yaw * M_PI / 180) + newY * cos(yaw * M_PI / 180);
         float finalZ = newZ;
 
-        glVertex3f(finalX, finalY, finalZ); // Render dot at transformed (x, y, z)
+        glVertex3f(finalX, finalY, finalZ);
     }
     glEnd();
 
-    // Disable depth testing after rendering
     glDisable(GL_DEPTH_TEST);
 }
 
@@ -127,8 +119,8 @@ int main() {
 
     glfwMakeContextCurrent(window);
     //glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND); // Enable blending for transparency
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Set blending function
+    glEnable(GL_BLEND); 
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); 
 
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
@@ -137,7 +129,7 @@ int main() {
     glLoadIdentity();
     gluPerspective(45.0f, (float)WIDTH / (float)HEIGHT, 0.1f, 100.0f);
 
-    generateSpherePoints(); // Generate points on the sphere
+    generateSpherePoints();
 
     while (!glfwWindowShouldClose(window)) {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -154,6 +146,7 @@ int main() {
     }
 
     glfwTerminate();
+    
     return 0;
 }
 
