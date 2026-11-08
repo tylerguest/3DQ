@@ -1,0 +1,166 @@
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #111110;
+  color: #e8e4da;
+  font-family: system-ui, sans-serif;
+  user-select: none;
+}
+
+.app {
+  position: relative;
+  height: 100%;
+}
+
+.sphere {
+  position: absolute;
+  inset: 0;
+}
+
+.sphere canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+/* WebGL particle layer sits under the 2D overlay and ignores the mouse. */
+.sphere canvas.gl-layer {
+  pointer-events: none;
+}
+
+.sphere canvas:active {
+  cursor: grabbing;
+}
+
+.header {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+.hint {
+  position: absolute;
+  bottom: 14px;
+  width: 100%;
+  text-align: center;
+  font-size: 12px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.preview-bar {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.preview-tag {
+  opacity: 0.45;
+  margin-right: 4px;
+}
+
+.preview-bar button {
+  background: #1a1a18;
+  color: #e8e4da;
+  border: 1px solid #34332f;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-bar button:hover {
+  border-color: #5a5852;
+}
+
+.preview-bar button.active {
+  background: #ff8a2a;
+  border-color: #ff8a2a;
+  color: #111110;
+}
+
+.preview-error {
+  color: #e5484d;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed #8a867c;
+  border-radius: 12px;
+  background: rgba(17, 17, 16, 0.7);
+  font-size: 16px;
+  pointer-events: none;
+}
+
+.source-group {
+  display: flex;
+}
+
+.source-group button {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.source-group button:first-child {
+  border-radius: 6px 0 0 6px;
+  margin-left: 0;
+}
+
+.source-group button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.preview-bar button.selected {
+  background: #2a2926;
+  border-color: #8a867c;
+}
+
+.preview-bar button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.dev-stats {
+  position: absolute;
+  left: 24px;
+  top: 52px;
+  z-index: 1;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.55;
+  pointer-events: none;
+}

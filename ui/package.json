@@ -1,0 +1,24 @@
+{
+  "name": "3dq-gui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@juce-framework/webview": "file:../../JUCE/modules/juce_gui_extra/native/typescript/webview-interop",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.170.0"
+  },
+  "scripts": {
+    "dev": "node build.mjs --serve",
+    "build": "npm run typecheck && node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/three": "^0.170.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  }
+}
