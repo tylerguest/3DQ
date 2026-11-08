@@ -33,12 +33,10 @@ export default function App() {
     <div className="app">
       <header className="header">
         <span className="title">3DQ</span>
-        <span className="subtitle">Spherical Equalizer</span>
       </header>
       <Sphere onBandsChange={onBandsChange} externalBands={externalBands} getSpectrum={getSpectrum} getDynamics={getDynamics} />
       {!inPlugin && <PreviewBar bands={bands} />}
-      {process.env.NODE_ENV !== "production" && <div id="dev-stats" className="dev-stats" />}
-      <footer className="hint">Double-click: add band · Drag: move · Scroll or Ctrl+drag: gain · Shift+scroll: width (cuts: slope) · Alt+scroll: dynamic range · Ctrl+scroll: threshold · Right-click: mute · Shift+double-click: peak / low cut / high cut · Double-click band: remove</footer>
+      {process.env.NODE_ENV !== "production" && new URLSearchParams(location.search).has("stats") && <div id="dev-stats" className="dev-stats" />}
     </div>
   );
 }

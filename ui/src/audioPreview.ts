@@ -15,7 +15,7 @@
 // so a Mid band leaves the side signal untouched, an R band leaves L untouched, etc.
 // Bands run in series.
 
-import { Band, DEFAULT_CUT_SLOPE, DEFAULT_THRESHOLD_DB, dynamicGainFor, isCut, latToFreq } from "./bands";
+import { Band, DEFAULT_CUT_SLOPE, DEFAULT_THRESHOLD_DB, MAX_SHELF_Q, dynamicGainFor, isCut, isShelf, latToFreq } from "./bands";
 import type { BandDynamics } from "./pluginBridge";
 import { Spectrum, reduceToBands } from "./spectrum";
 
@@ -59,6 +59,12 @@ class BandStage {
   // Dynamics side-chain: this band's component, band-passed at its frequency.
   // The main thread reads it (see updateDynamics) and moves the filter gain.
   private readonly sidechain: BiquadFilterNode;
+  // Shelves: 1 + (A²-1)·(low/high-pass) + (A-1)·band-pass, the RBJ shelf split
+  // into parts, because Web Audio's own shelf filters ignore Q.
+  private readonly shelfPass: BiquadFilterNode;
+  private readonly shelfBand: BiquadFilterNode;
+  private readonly shelfPassGain: GainNode;
+  private readonly shelfBandGain: GainNode;
   private readonly detector: AnalyserNode;
   private readonly detectorData = new Float32Array(256);
   private envelope = 0;
@@ -104,6 +110,14 @@ class BandStage {
     this.filterIn.connect(this.filter);
     this.filter.connect(this.filterOut);
     this.chainKey = "peak";
+    this.shelfPass = new BiquadFilterNode(ctx, { type: "lowpass", channelCount: 1, channelCountMode: "explicit" });
+    this.shelfBand = new BiquadFilterNode(ctx, { type: "bandpass", channelCount: 1, channelCountMode: "explicit" });
+    this.shelfPassGain = monoGain(ctx, 0);
+    this.shelfBandGain = monoGain(ctx, 0);
+    this.shelfPass.connect(this.shelfPassGain);
+    this.shelfBand.connect(this.shelfBandGain);
+    this.shelfPassGain.connect(this.filterOut);
+    this.shelfBandGain.connect(this.filterOut);
     this.filterOut.connect(delta);
     minusDry.connect(delta);
 
@@ -117,7 +131,8 @@ class BandStage {
 
     this.nodes = [this.input, this.output, splitter, this.projL, this.projR, component, this.filter,
                   minusDry, delta, this.backL, this.backR, merger, this.sidechain, this.detector,
-                  this.filterIn, this.filterOut, this.wet];
+                  this.filterIn, this.filterOut, this.wet, this.shelfPass, this.shelfBand,
+                  this.shelfPassGain, this.shelfBandGain];
   }
 
   set(band: Band, immediate: boolean) {
@@ -136,12 +151,33 @@ class BandStage {
     apply(this.wet.gain, band.muted ? 0 : 1);
     if (!band.range) apply(this.filter.gain, band.muted ? 0 : band.gainDb); // muted: flat, i.e. no effect
     apply(this.filter.Q, band.q);
+    if (isShelf(band) && (!band.range || immediate)) this.applyShelf(band, band.muted ? 0 : band.gainDb, immediate ? 0 : SMOOTHING);
+    // A shelf's detector covers the side of the spectrum it moves.
+    const shelf = isShelf(band);
+    this.sidechain.type = !shelf ? "bandpass" : band.type === "lowshelf" ? "lowpass" : "highpass";
     apply(this.sidechain.frequency, latToFreq(band.lat));
-    apply(this.sidechain.Q, band.q);
+    apply(this.sidechain.Q, shelf ? -3.01 : band.q); // low/high-pass Q is in dB: Butterworth
     if (!band.range) {
       this.envelope = 0;
       this.liveGainDb = band.muted ? 0 : band.gainDb;
     }
+  }
+
+  // Moves the shelf's parts to a gain. Each part needs its corner at f / √A
+  // (low shelf) or f · √A (high shelf). timeConstant 0 = jump there now.
+  private applyShelf(band: Band, gainDb: number, timeConstant: number) {
+    const t = this.ctx.currentTime;
+    const apply = (param: AudioParam, value: number) =>
+      timeConstant === 0 ? param.setValueAtTime(value, t) : param.setTargetAtTime(value, t, timeConstant);
+    const A = Math.pow(10, gainDb / 40);
+    const q = Math.min(band.q, MAX_SHELF_Q);
+    const corner = latToFreq(band.lat) * (band.type === "lowshelf" ? 1 / Math.sqrt(A) : Math.sqrt(A));
+    apply(this.shelfPass.frequency, corner);
+    apply(this.shelfBand.frequency, corner);
+    apply(this.shelfPass.Q, 20 * Math.log10(q)); // low/high-pass Q is in dB
+    apply(this.shelfBand.Q, q);
+    apply(this.shelfPassGain.gain, A * A - 1);
+    apply(this.shelfBandGain.gain, A - 1);
   }
 
   // Builds / updates the filter chain between filterIn and filterOut.
@@ -149,7 +185,8 @@ class BandStage {
     const cut = isCut(band);
     const slope = band.slope ?? DEFAULT_CUT_SLOPE;
     const order = cut ? slope / 6 : 0;
-    const key = cut ? `${band.type}/${order}` : "peak";
+    const shelf = isShelf(band);
+    const key = cut ? `${band.type}/${order}` : shelf ? band.type! : "peak";
     const freq = latToFreq(band.lat);
     const high = band.type === "lowcut"; // low cut = high-pass
 
@@ -165,7 +202,12 @@ class BandStage {
       this.firstOrderKey = "";
       this.chainKey = key;
 
-      if (!cut) {
+      if (shelf) {
+        this.shelfPass.type = band.type === "lowshelf" ? "lowpass" : "highpass";
+        this.filterIn.connect(this.filterOut);
+        this.filterIn.connect(this.shelfPass);
+        this.filterIn.connect(this.shelfBand);
+      } else if (!cut) {
         this.filterIn.connect(this.filter);
         this.filter.connect(this.filterOut);
       } else {
@@ -215,22 +257,29 @@ class BandStage {
 
   private wired = false;
 
-  // Dynamic bands: follow the side-chain level and move the gain.
-  // Called often from the main thread (every few ms) while audio plays.
-  updateDynamics(dt: number) {
-    const band = this.band;
-    if (!band || !band.range || isCut(band)) return;
-
+  // The side-chain's peak level over the last few ms (0 for a static band).
+  readPeak() {
+    if (!this.band?.range || isCut(this.band)) return 0;
     this.detector.getFloatTimeDomainData(this.detectorData);
     let peak = 0;
     for (const v of this.detectorData) peak = Math.max(peak, Math.abs(v));
+    return peak;
+  }
+
+  // Dynamic bands: follow the side-chain level and move the gain.
+  // Called often from the main thread (every few ms) while audio plays.
+  updateDynamics(dt: number, peak: number) {
+    const band = this.band;
+    if (!band || !band.range || isCut(band)) return;
+
     const k = peak > this.envelope ? 1 - Math.exp(-dt / DYN_ATTACK) : 1 - Math.exp(-dt / DYN_RELEASE);
     this.envelope += (peak - this.envelope) * k;
     this.levelDb = 20 * Math.log10(this.envelope + 1e-9);
 
     const dyn = band.muted ? 0 : dynamicGainFor(this.levelDb, band.threshold ?? DEFAULT_THRESHOLD_DB, band.range);
     this.liveGainDb = band.muted ? 0 : band.gainDb + dyn;
-    this.filter.gain.setTargetAtTime(this.liveGainDb, this.ctx.currentTime, 0.003);
+    if (isShelf(band)) this.applyShelf(band, this.liveGainDb, 0.003);
+    else this.filter.gain.setTargetAtTime(this.liveGainDb, this.ctx.currentTime, 0.003);
   }
 
   dispose() {
@@ -260,7 +309,14 @@ export class EqChain {
     this.rewire();
   }
 
-  setBands(bands: Band[]) {
+  setBands(requested: Band[]) {
+    // A stereo band is two stages in series, one on the L axis and one on the
+    // R axis: the same filter on each channel.
+    const bands: Band[] = [];
+    for (const b of requested) {
+      if (b.stereo) bands.push({ ...b, lon: -Math.PI / 2 }, { ...b, lon: Math.PI / 2 });
+      else bands.push(b);
+    }
     const ids = bands.map((b) => b.id);
     const sameLayout = ids.length === this.bandIds.length && ids.every((id, i) => id === this.bandIds[i]);
 
@@ -275,7 +331,12 @@ export class EqChain {
   }
 
   updateDynamics(dt: number) {
-    for (const s of this.stages) s.updateDynamics(dt);
+    // The two halves of a stereo band share the louder channel's level.
+    const peaks = this.stages.map((s) => s.readPeak());
+    this.stages.forEach((s, i) => {
+      const id = this.bandIds[i];
+      s.updateDynamics(dt, Math.max(peaks[i], this.bandIds[i - 1] === id ? peaks[i - 1] : 0, this.bandIds[i + 1] === id ? peaks[i + 1] : 0));
+    });
   }
 
   // Live gain / detector level per band id.

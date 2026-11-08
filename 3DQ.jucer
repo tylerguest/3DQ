@@ -12,33 +12,45 @@
             file="Source/PluginEditor.cpp"/>
       <FILE id="Z9APyL" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
       <FILE id="sEqHdr" name="SphereEq.h" compile="0" resource="0" file="Source/SphereEq.h"/>
-      <FILE id="stSpec" name="StereoSpectrum.h" compile="0" resource="0" file="Source/StereoSpectrum.h"/>
-    </GROUP>
-    <GROUP id="{5B1E0C2A-3D0F-4E6B-9C1A-7F2D3E4A5B60}" name="WebUI">
-      <FILE id="wUiHtm" name="index.html" compile="0" resource="1" file="ui/build/index.html"/>
-      <FILE id="wUiJsx" name="index.js" compile="0" resource="1" file="ui/build/index.js"/>
-      <FILE id="wUiCss" name="index.css" compile="0" resource="1" file="ui/build/index.css"/>
+      <FILE id="stSpec" name="StereoSpectrum.h" compile="0" resource="0"
+            file="Source/StereoSpectrum.h"/>
+      <FILE id="sphMdl" name="SphereModel.h" compile="0" resource="0" file="Source/SphereModel.h"/>
+      <FILE id="sphFdH" name="SphereField.h" compile="0" resource="0" file="Source/SphereField.h"/>
+      <FILE id="sphFdC" name="SphereField.cpp" compile="1" resource="0" file="Source/SphereField.cpp"/>
+      <FILE id="sprRnH" name="SpriteRenderer.h" compile="0" resource="0"
+            file="Source/SpriteRenderer.h"/>
+      <FILE id="sprRnC" name="SpriteRenderer.cpp" compile="1" resource="0"
+            file="Source/SpriteRenderer.cpp"/>
+      <FILE id="sphUiH" name="SphereUi.h" compile="0" resource="0" file="Source/SphereUi.h"/>
+      <FILE id="bndPnH" name="BandPanel.h" compile="0" resource="0" file="Source/BandPanel.h"/>
+      <FILE id="bndPnC" name="BandPanel.cpp" compile="1" resource="0" file="Source/BandPanel.cpp"/>
+      <FILE id="hstWnH" name="HostWindow.h" compile="0" resource="0" file="Source/HostWindow.h"/>
+      <FILE id="hstWnC" name="HostWindow.cpp" compile="1" resource="0" file="Source/HostWindow.cpp"/>
+      <FILE id="sphVwH" name="SphereView.h" compile="0" resource="0" file="Source/SphereView.h"/>
+      <FILE id="sphVwC" name="SphereView.cpp" compile="1" resource="0" file="Source/SphereView.cpp"/>
     </GROUP>
   </MAINGROUP>
   <MODULES>
-    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
     <MODULE id="juce_audio_plugin_client" showAllCode="1" useLocalCopy="0"
-            useGlobalPath="1"/>
-    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+            useGlobalPath="0"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
     <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
-            useGlobalPath="1"/>
-    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
-    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+            useGlobalPath="0"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_opengl" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
   </MODULES>
-  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"/>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_VST3_CAN_REPLACE_VST2="0"
+               JUCE_WEB_BROWSER="0"/>
   <EXPORTFORMATS>
     <LINUX_MAKE targetFolder="Builds/LinuxMakefile">
       <CONFIGURATIONS>
@@ -46,20 +58,21 @@
         <CONFIGURATION isDebug="0" name="Release" targetName="3DQ"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
-        <MODULEPATH id="juce_audio_basics" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_devices" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_formats" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_plugin_client" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_processors" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_processors_headless" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_audio_utils" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_core" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_data_structures" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_dsp" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_events" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_graphics" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_gui_basics" path="../JUCE/modules"/>
-        <MODULEPATH id="juce_gui_extra" path="../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_basics" path="modules"/>
+        <MODULEPATH id="juce_audio_devices" path="modules"/>
+        <MODULEPATH id="juce_audio_formats" path="modules"/>
+        <MODULEPATH id="juce_audio_plugin_client" path="modules"/>
+        <MODULEPATH id="juce_audio_processors" path="modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="modules"/>
+        <MODULEPATH id="juce_audio_utils" path="modules"/>
+        <MODULEPATH id="juce_core" path="modules"/>
+        <MODULEPATH id="juce_data_structures" path="modules"/>
+        <MODULEPATH id="juce_dsp" path="modules"/>
+        <MODULEPATH id="juce_events" path="modules"/>
+        <MODULEPATH id="juce_graphics" path="modules"/>
+        <MODULEPATH id="juce_gui_basics" path="modules"/>
+        <MODULEPATH id="juce_gui_extra" path="modules"/>
+        <MODULEPATH id="juce_opengl" path="modules"/>
       </MODULEPATHS>
     </LINUX_MAKE>
   </EXPORTFORMATS>

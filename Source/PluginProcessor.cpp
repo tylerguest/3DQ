@@ -37,6 +37,7 @@ _3DQAudioProcessor::_3DQAudioProcessor()
         p.threshold = state.getRawParameterValue (ids.threshold);
         p.type    = state.getRawParameterValue (ids.type);
         p.slope   = state.getRawParameterValue (ids.slope);
+        p.stereo  = state.getRawParameterValue (ids.stereo);
     }
 }
 
@@ -45,7 +46,7 @@ _3DQAudioProcessor::BandParamIDs _3DQAudioProcessor::getBandParamIDs (int slot)
 {
     const auto prefix = "band" + juce::String (slot + 1) + "_";
     return { prefix + "on", prefix + "freq", prefix + "gain", prefix + "q", prefix + "pos", prefix + "mute",
-             prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope" };
+             prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope", prefix + "stereo" };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout _3DQAudioProcessor::createParameterLayout()
@@ -87,12 +88,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout _3DQAudioProcessor::createPa
                                                                       juce::NormalisableRange<float> { minThresholdDb, maxThresholdDb, 0.1f }, -30.0f,
                                                                       juce::AudioParameterFloatAttributes().withLabel ("dB")));
         group->addChild (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { ids.type, 1 }, name + "Type",
-                                                                       juce::StringArray { "Peak", "Low Cut", "High Cut" }, 0));
+                                                                       juce::StringArray { "Peak", "Low Cut", "High Cut", "Low Shelf", "High Shelf" }, 0));
         juce::StringArray slopeNames;
         for (auto s : cutSlopes)
             slopeNames.add (juce::String (s) + " dB/oct");
         group->addChild (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { ids.slope, 1 }, name + "Slope",
                                                                        slopeNames, 3)); // 24 dB/oct
+        group->addChild (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { ids.stereo, 1 }, name + "Stereo", false));
         layout.add (std::move (group));
     }
 
@@ -102,10 +104,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout _3DQAudioProcessor::createPa
 threedq::BandParams _3DQAudioProcessor::getBandParams (int slot) const
 {
     const auto& p = bandParams[(size_t) slot];
-    const auto type = (threedq::FilterType) std::clamp ((int) std::lround (p.type->load()), 0, 2);
+    const auto type = (threedq::FilterType) std::clamp ((int) std::lround (p.type->load()), 0, 4);
     const auto slopeIndex = std::clamp ((int) std::lround (p.slope->load()), 0, (int) threedq::cutSlopes.size() - 1);
     return { p.enabled->load() >= 0.5f, p.freq->load(), p.gain->load(), p.q->load(), p.pos->load(),
-             p.range->load(), p.threshold->load(), type, threedq::cutSlopes[(size_t) slopeIndex] };
+             p.range->load(), p.threshold->load(), type, threedq::cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f };
 }
 
 bool _3DQAudioProcessor::isBandMuted (int slot) const

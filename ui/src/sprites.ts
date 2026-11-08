@@ -139,9 +139,13 @@ export class GlSpriteSink implements SpriteSink {
   private constructor(private readonly canvas: HTMLCanvasElement, private readonly styles: SpriteStyle[]) {
     this.renderer = new THREE.WebGLRenderer({
       canvas, alpha: true, antialias: false, premultipliedAlpha: true, powerPreference: "high-performance",
+      // The plugin's web view paints on its own schedule rather than right
+      // after each frame; without this it can paint an already-cleared buffer.
+      preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(1); // we size the drawing buffer in device pixels ourselves
-    this.renderer.setClearColor(0x000000, 0);
+    // Opaque graphite, so glow adds to the background exactly as it does in the plugin.
+    this.renderer.setClearColor(0x111110, 1);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader,

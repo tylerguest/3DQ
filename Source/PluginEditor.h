@@ -1,8 +1,8 @@
 /*
   ==============================================================================
 
-    3DQ editor: hosts the web GUI (ui/) inside a juce::WebBrowserComponent and
-    keeps the GUI's bands in sync with the processor's band parameters.
+    3DQ editor: shows the native sphere (SphereView) and keeps its bands in sync
+    with the processor's band parameters.
 
   ==============================================================================
 */
@@ -11,6 +11,7 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "SphereView.h"
 #include "StereoSpectrum.h"
 
 //==============================================================================
@@ -27,30 +28,33 @@ public:
     void resized() override;
 
 private:
-    static std::optional<juce::WebBrowserComponent::Resource> getResource (const juce::String& url);
+    // sphere -> processor
+    void applyBandsFromSphere (const sphere::BandSet& bands);
+    // processor -> sphere
+    sphere::BandSet getBandsFromProcessor() const;
 
-    // GUI -> processor
-    void applyBandsFromGui (const juce::var& bands);
-    // processor -> GUI
-    juce::var getBandsForGui() const;
+    // Runs on the sphere's render thread.
+    void readLiveAudio (SphereView::LiveAudio& live);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void timerCallback() override;
 
-    _3DQAudioProcessor& audioProcessor;
+    static constexpr int timerHz = 30, minimumWidth = 440, minimumHeight = 340;
 
-    // Set while we write parameters on the GUI's behalf, so those changes
-    // aren't echoed back to the GUI.
-    std::atomic<bool> applyingGuiChange { false };
+    _3DQAudioProcessor& audioProcessor;
+    int hostWindowTicks = 0;
+
+    // Set while we write parameters on the sphere's behalf, so those changes
+    // aren't echoed back to it.
+    std::atomic<bool> applyingSphereEdit { false };
     std::atomic<bool> hostChangedBands { false };
 
-    // Audio analysis sent to the GUI as a "spectrum" event every timer tick.
-    void sendSpectrum();
     StereoSpectrum spectrum;
     std::vector<float> recentLeft  = std::vector<float> ((size_t) StereoSpectrum::fftSize);
     std::vector<float> recentRight = std::vector<float> ((size_t) StereoSpectrum::fftSize);
 
-    juce::WebBrowserComponent webView;
+    // Last, so its render thread stops before anything it reads is destroyed.
+    SphereView sphereView;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (_3DQAudioProcessorEditor)
 };

@@ -6,12 +6,15 @@
 //   q         -> how wide the bump is
 
 // Peak = bell (gain, Q, dynamics). Cuts are Butterworth filters on the band's
-// stereo axis: low cut = high-pass, high cut = low-pass.
-export type FilterType = "peak" | "lowcut" | "highcut";
-export const FILTER_TYPES: FilterType[] = ["peak", "lowcut", "highcut"];
+// stereo axis: low cut = high-pass, high cut = low-pass. Shelves take gain, Q
+// and dynamics like a peak, with the band's frequency at the half-gain point.
+export type FilterType = "peak" | "lowcut" | "highcut" | "lowshelf" | "highshelf";
+export const FILTER_TYPES: FilterType[] = ["peak", "lowcut", "highcut", "lowshelf", "highshelf"];
+export const MAX_SHELF_Q = 2; // must match threedq::maxShelfQ
 export const CUT_SLOPES = [6, 12, 18, 24, 36, 48]; // dB/oct, must match threedq::cutSlopes
 export const DEFAULT_CUT_SLOPE = 24;
 export const isCut = (b: Band) => b.type === "lowcut" || b.type === "highcut";
+export const isShelf = (b: Band) => b.type === "lowshelf" || b.type === "highshelf";
 
 export interface Band {
   id: number; // parameter slot in the plugin, 0 .. MAX_BANDS-1
@@ -26,6 +29,7 @@ export interface Band {
   threshold?: number;
   type?: FilterType; // default "peak"
   slope?: number; // dB/oct, cuts only
+  stereo?: boolean; // filters L and R alike: a full belt round the sphere
   // Display only (never sent to the plugin): the gain the band has right now,
   // including dynamic movement. Undefined = gainDb.
   liveGainDb?: number;
@@ -139,10 +143,26 @@ export function cutResponseDb(type: FilterType, cutoff: number, slope: number, f
   return -10 * Math.log10(1 + Math.pow(ratio, 2 * n));
 }
 
+// A shelf's magnitude (dB) at (frequency / shelf frequency)^2: the analogue RBJ
+// shelf. shelfA is 10^(gain / 40), shelfK is A / Q^2 (the per-frame parts).
+export function shelfDbAt(low: boolean, shelfA: number, shelfK: number, ratioSquared: number) {
+  const damping = shelfK * ratioSquared;
+  const a = shelfA - ratioSquared, c = 1 - shelfA * ratioSquared;
+  const lowSide = a * a + damping, highSide = c * c + damping;
+  return 10 * Math.log10(shelfA * shelfA * (low ? lowSide / highSide : highSide / lowSide));
+}
+export const shelfA = (gainDb: number) => Math.pow(10, gainDb / 40);
+export const shelfK = (a: number, q: number) => a / Math.pow(Math.min(q, MAX_SHELF_Q), 2);
+export function shelfResponseDb(b: Band, gainDb: number, f: number) {
+  const a = shelfA(gainDb), ratio = f / latToFreq(b.lat);
+  return shelfDbAt(b.type === "lowshelf", a, shelfK(a, b.q), ratio * ratio);
+}
+
 // How much a band on axis lonBand affects a point at longitude lon: the
 // squared overlap of their stereo axes, cos²(Δlon / 2) = (1 + cos Δlon) / 2.
 // 1 on its own axis, 0 on the opposite one (e.g. a Mid cut never touches Side).
 export const axisOverlap = (lonBand: number, lon: number) => (1 + Math.cos(lon - lonBand)) / 2;
+export const bandOverlap = (b: Band, lon: number) => (b.stereo ? 1 : axisOverlap(b.lon, lon));
 
 // Display depth (<= 0) of a cut at a point: its response in dB, shaped like
 // gains, weighted by stereo overlap.
@@ -150,7 +170,7 @@ export function cutDisplacement(b: Band, d: [number, number, number]) {
   const lat = Math.asin(clamp(d[1], -1, 1));
   const lon = Math.atan2(d[0], d[2]);
   const db = cutResponseDb(b.type!, latToFreq(b.lat), b.slope ?? DEFAULT_CUT_SLOPE, latToFreq(lat));
-  return gainShape(db) * MAX_CUT_DISPLACEMENT * axisOverlap(b.lon, lon);
+  return gainShape(db) * MAX_CUT_DISPLACEMENT * bandOverlap(b, lon);
 }
 
 export function surfaceDisplacement(bands: Band[], dirs: [number, number, number][], d: [number, number, number]) {
@@ -158,8 +178,16 @@ export function surfaceDisplacement(bands: Band[], dirs: [number, number, number
   for (let i = 0; i < bands.length; ++i) {
     if (bands[i].muted) continue; // a muted band leaves the surface flat
     if (isCut(bands[i])) { r += cutDisplacement(bands[i], d); continue; }
+    if (isShelf(bands[i])) {
+      const lat = Math.asin(clamp(d[1], -1, 1)), lon = Math.atan2(d[0], d[2]);
+      r += gainDisplacement(shelfResponseDb(bands[i], displayGain(bands[i]), latToFreq(lat))) * bandOverlap(bands[i], lon);
+      continue;
+    }
     const bd = dirs[i];
-    const dot = clamp(d[0] * bd[0] + d[1] * bd[1] + d[2] * bd[2], -1, 1);
+    // A stereo peak is a belt: only the distance in latitude counts.
+    const dot = bands[i].stereo
+      ? clamp(Math.sqrt(Math.max(0, 1 - d[1] * d[1])) * Math.cos(bands[i].lat) + d[1] * Math.sin(bands[i].lat), -1, 1)
+      : clamp(d[0] * bd[0] + d[1] * bd[1] + d[2] * bd[2], -1, 1);
     // Squared chord length 2(1 - cos θ) ≈ θ² near the band, without an acos.
     // (Sphere.tsx inlines this same formula in its per-particle loop.)
     const dist2 = 2 * (1 - dot);
@@ -181,17 +209,18 @@ export interface WireBand {
   threshold: number;
   type: FilterType;
   slope: number;
+  stereo: boolean;
 }
 
 export const toWire = (b: Band): WireBand => ({
   id: b.id, freq: latToFreq(b.lat), gainDb: b.gainDb, q: b.q, pos: (b.lon * 180) / Math.PI, muted: !!b.muted,
   range: b.range ?? 0, threshold: b.threshold ?? DEFAULT_THRESHOLD_DB,
-  type: b.type ?? "peak", slope: b.slope ?? DEFAULT_CUT_SLOPE,
+  type: b.type ?? "peak", slope: b.slope ?? DEFAULT_CUT_SLOPE, stereo: !!b.stereo,
 });
 
 export const fromWire = (w: WireBand): Band => ({
   id: w.id, lat: freqToLat(w.freq), lon: (w.pos * Math.PI) / 180, gainDb: w.gainDb, q: w.q, muted: !!w.muted,
   range: w.range ?? 0, threshold: w.threshold ?? DEFAULT_THRESHOLD_DB,
-  type: w.type ?? "peak", slope: w.slope ?? DEFAULT_CUT_SLOPE,
+  type: w.type ?? "peak", slope: w.slope ?? DEFAULT_CUT_SLOPE, stereo: !!w.stereo,
 });
 

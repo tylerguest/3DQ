@@ -58,7 +58,7 @@ public:
     // Band parameters: one fixed slot per possible band, so hosts can automate them.
     struct BandParamIDs
     {
-        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope;
+        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo;
     };
 
     static BandParamIDs getBandParamIDs (int slot);
@@ -97,8 +97,9 @@ private:
         std::atomic<float>* mute = nullptr;
         std::atomic<float>* range = nullptr;
         std::atomic<float>* threshold = nullptr;
-        std::atomic<float>* type = nullptr;  // choice index: Peak, Low cut, High cut
+        std::atomic<float>* type = nullptr;  // choice index: Peak, Low cut, High cut, Low shelf, High shelf
         std::atomic<float>* slope = nullptr; // choice index into threedq::cutSlopes
+        std::atomic<float>* stereo = nullptr;
     };
 
     std::array<BandParamPointers, threedq::maxBands> bandParams;

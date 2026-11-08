@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 import { NUM_SPECTRUM_BANDS, SPECTRUM_RANGE_DB, Spectrum, emptySpectrum, powerToLevel } from "./spectrum";
 import type { BandDynamics } from "./pluginBridge";
+import { BandPanelLayout, PanelTarget, PanelViewFit, drawBandPanel, fitViewAbovePanel, hitBandPanel, knobEnabled, knobIsStepped, knobPosition, makeBandPanelLayout, resetKnob, setBandType, setKnobPosition } from "./bandPanel";
 import { CanvasSpriteSink, GlSpriteSink, SpriteProfile, SpriteSink, SpriteStyle } from "./sprites";
 import {
   Band, MAX_BANDS, MAX_FREQ, MIN_FREQ, axisOverlap, cutResponseDb, MAX_GAIN_DB, MAX_Q, MIN_Q, bandDirection, bandWidth, clamp, formatDb, formatFreq, formatGain,
+  MAX_SHELF_Q, bandOverlap, isShelf, shelfA, shelfDbAt, shelfK, shelfResponseDb,
   CUT_SLOPES, DEFAULT_CUT_SLOPE, DEFAULT_THRESHOLD_DB, FILTER_TYPES, MAX_BOOST_DISPLACEMENT, MAX_CUT_DISPLACEMENT, gainDisplacement, limitDisplacement, isCut, MAX_THRESHOLD_DB, MIN_THRESHOLD_DB, displayGain, gainShape, latToFreq, midSideLabel, panLabel, surfaceDisplacement,
 } from "./bands";
 
@@ -15,6 +17,7 @@ import {
 // Gestures:
 //   drag empty space       rotate
 //   scroll empty space     zoom
+//   hold wheel and drag    pan the view
 //   double-click sphere    add a band there
 //   drag a node            move it (height = frequency, around = stereo position)
 //   scroll on a node       gain (bump out / dent in)
@@ -32,6 +35,29 @@ const NUM_COLOUR_BUCKETS = 32;
 const SPRITE_SIZE = 64; // Canvas 2D fallback sprites; big enough not to blur when scaled up
 const CAMERA_DISTANCE = 3.2;
 const NODE_HIT_RADIUS = 16; // CSS px
+const SPHERE_RADIUS_FRACTION = 0.32; // of the window's smaller side, at zoom 1
+const KNOB_PIXELS_FULL_RANGE = 200; // CSS px of drag from one end of a panel knob to the other
+const KNOB_FINE_FACTOR = 0.2; // while Shift is held
+const HELP_BUTTON_RADIUS = 10; // CSS px
+const HELP_BUTTON_INSET = 24; // CSS px, from the right and bottom edges to the button's centre
+// The font the plugin ends up with on Linux, so both versions set text alike.
+const UI_FONT = '"Liberation Sans", system-ui, sans-serif';
+// Everything the ? button lists. Keep in step with SphereView::drawHelp.
+const HELP_ROWS: [string, string][] = [
+  ["Double-click sphere", "Add band"],
+  ["Double-click band", "Remove band"],
+  ["Drag band", "Move band"],
+  ["Drag empty space", "Rotate"],
+  ["Scroll empty space", "Zoom"],
+  ["Hold wheel and drag", "Pan view"],
+  ["Scroll band or Ctrl+drag", "Gain"],
+  ["Shift+scroll band", "Width (cuts: slope)"],
+  ["Alt+scroll band", "Dynamic range"],
+  ["Ctrl+scroll band", "Threshold"],
+  ["Right-click band", "Mute"],
+  ["Shift+right-click band", "Stereo / mono"],
+  ["Shift+double-click band", "Peak / cuts / shelves"],
+];
 
 type RGB = [number, number, number];
 type Vec3 = [number, number, number];
@@ -276,6 +302,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       pCosLon[i] = Math.cos(lon);
       pSinLon[i] = Math.sin(lon);
     });
+    const sLow = new Uint8Array(MAX_BANDS), sFc = new Float32Array(MAX_BANDS), sA = new Float32Array(MAX_BANDS);
+    const sK = new Float32Array(MAX_BANDS), sCos = new Float32Array(MAX_BANDS), sSin = new Float32Array(MAX_BANDS);
+    const cBias = new Float32Array(MAX_BANDS), sBias = new Float32Array(MAX_BANDS);
+    const rSin = new Float32Array(MAX_BANDS), rCos = new Float32Array(MAX_BANDS), rAmp = new Float32Array(MAX_BANDS), rInvW2 = new Float32Array(MAX_BANDS);
     const cLow = new Uint8Array(MAX_BANDS), cFc = new Float32Array(MAX_BANDS), cTwoN = new Float32Array(MAX_BANDS);
     const cCos = new Float32Array(MAX_BANDS), cSin = new Float32Array(MAX_BANDS);
 
@@ -439,14 +469,22 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
     replaceBandsRef.current = (incoming) => {
       // Don't yank a band out from under an active drag.
-      if (draggedBand) return;
+      if (draggedBand || knobDrag) return;
       const keep = (b: Band | null) => (b ? bands.find((x) => x.id === b.id) ?? null : null);
       bands.length = 0;
       for (const b of incoming) bands.push({ ...b });
       hoveredBand = keep(hoveredBand);
+      selectedBand = keep(selectedBand);
       wheelBand = keep(wheelBand);
     };
     let hoveredBand: Band | null = null;
+    let selectedBand: Band | null = null; // the band last clicked: highlighted, and what the panel controls
+    let panelOpen = false;
+    let panelAmount = 0; // eased, so the panel slides up and down
+    let panelFit: PanelViewFit = { zoomScale: 1, panDeltaY: 0 };
+    let panelFitWidth = 0, panelFitHeight = 0;
+    let panelHover: PanelTarget | null = null;
+    let knobDrag: { knob: number; lastY: number; position: number } | null = null;
     let draggedBand: Band | null = null;
     let wheelBand: Band | null = null;
     let lastWheelTime = 0;
@@ -455,7 +493,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const notify = () => onBandsChangeRef.current?.(bands.map((b) => ({ ...b })));
 
     // View state: yaw spins around the vertical axis, pitch tilts toward the viewer.
-    const view = { yaw: 0, pitch: -0.35, zoom: 1, yawVelocity: 0, pitchVelocity: 0 };
+    const view = { yaw: 0, pitch: -0.35, zoom: 0.905, yawVelocity: 0, pitchVelocity: 0, panX: 0, panY: 0 }; // pan in CSS px
     const AUTO_ROTATE = 0.0035; // radians per frame
     let rotating = false;
     let lastX = 0;
@@ -478,20 +516,24 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     let dpr = 1;
 
     const resize = () => {
-      // With WebGL, render above the screen's resolution (supersampling) so
-      // the fine particles get smooth, sharp edges instead of stair-stepped
-      // pixels. The Canvas 2D fallback can't afford it.
-      const supersample = glSink ? 1.5 : 1;
-      dpr = Math.min((window.devicePixelRatio || 1) * supersample, 3);
-      canvas.width = Math.round(canvas.clientWidth * dpr);
-      canvas.height = Math.round(canvas.clientHeight * dpr);
+      dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const width = Math.round(canvas.clientWidth * dpr), height = Math.round(canvas.clientHeight * dpr);
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
     };
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     resize();
 
     // ---- view maths ------------------------------------------------------
-    const radiusPx = () => Math.min(canvas.width, canvas.height) * 0.32 * view.zoom;
+    const radiusPx = () => Math.min(canvas.width, canvas.height) * SPHERE_RADIUS_FRACTION * view.zoom * (1 + (panelFit.zoomScale - 1) * panelAmount);
+    const centreX = () => canvas.width / 2 + view.panX * dpr;
+    const centreY = () => canvas.height / 2 + (view.panY + panelFit.panDeltaY * panelAmount) * dpr;
+    // Keeps the sphere's centre inside the window, so it can never be lost off-screen.
+    const clampPan = () => {
+      view.panX = clamp(view.panX, -canvas.clientWidth / 2, canvas.clientWidth / 2);
+      view.panY = clamp(view.panY, -canvas.clientHeight / 2, canvas.clientHeight / 2);
+    };
 
     // Model space -> view space (yaw about Y, then pitch about X). +z faces the viewer.
     // Rotation trig, recomputed only when the view angle changes.
@@ -523,7 +565,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const toScreen = ([x, y, z]: Vec3): Vec3 => {
       const scale = CAMERA_DISTANCE / (CAMERA_DISTANCE - z);
       const r = radiusPx();
-      return [canvas.width / 2 + x * r * scale, canvas.height / 2 - y * r * scale, z];
+      return [centreX() + x * r * scale, centreY() - y * r * scale, z];
     };
 
     // Canvas pixel -> unit direction (model space) of the point on a sphere of
@@ -531,8 +573,8 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // outside the silhouette snap to the sphere's edge.
     const pickSphere = (px: number, py: number, clampToEdge: boolean, radius = 1): Vec3 | null => {
       const r = radiusPx();
-      const u = (px - canvas.width / 2) / r;
-      const v = -(py - canvas.height / 2) / r;
+      const u = (px - centreX()) / r;
+      const v = -(py - centreY()) / r;
       const D = CAMERA_DISTANCE;
       // Ray from (0,0,D) through (u,v,0) at t=1: P(t) = (t u, t v, D - t D).
       const a = u * u + v * v + D * D;
@@ -599,17 +641,93 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // Ctrl (Cmd on macOS) + drag on a band: vertical drag sets its gain.
     const GAIN_DB_PER_PIXEL = 0.1;
     let gainDrag: { band: Band; startY: number; startGain: number } | null = null;
+    let panDrag: { x: number; y: number } | null = null; // last pointer position while panning
+
+    let helpHovered = false;
+    let helpAmount = 0; // eased, so the panel fades in and out
+
+    const overHelpButton = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return Math.hypot(e.clientX - rect.left - (rect.width - HELP_BUTTON_INSET),
+                        e.clientY - rect.top - (rect.height - HELP_BUTTON_INSET)) <= HELP_BUTTON_RADIUS + 3;
+    };
+
+    // The panel follows a band that goes away (removed, or replaced by the host).
+    const validateSelection = () => {
+      if (selectedBand && bands.indexOf(selectedBand) >= 0) return;
+      selectedBand = bands.reduce<Band | null>((low, b) => (!low || b.lat < low.lat ? b : low), null);
+    };
+    // Steps through the bands in frequency order, wrapping round.
+    const selectNeighbour = (direction: number) => {
+      if (!bands.length) return;
+      const order = [...bands].sort((a, b) => a.lat - b.lat);
+      const current = selectedBand ? Math.max(0, order.indexOf(selectedBand)) : 0;
+      selectedBand = order[(current + direction + order.length) % order.length];
+    };
+    const updatePanelFit = () => {
+      panelFitWidth = canvas.clientWidth;
+      panelFitHeight = canvas.clientHeight;
+      panelFit = fitViewAbovePanel(panelFitWidth, panelFitHeight, view.zoom, view.panY, SPHERE_RADIUS_FRACTION);
+    };
+    const panelLayout = (amount: number): BandPanelLayout => makeBandPanelLayout(canvas.clientWidth, canvas.clientHeight, amount);
+    const panelTarget = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return hitBandPanel(panelLayout(panelOpen ? 1 : 0), e.clientX - rect.left, e.clientY - rect.top, panelOpen, !!selectedBand && bands.indexOf(selectedBand) >= 0);
+    };
+    const panelKnobCursor = () => (panelHover?.kind === "knob" || panelHover?.kind === "background" ? "default" : "pointer");
 
     const updateCursor = () => {
-      canvas.style.cursor = gainDrag ? "ns-resize" : draggedBand || rotating ? "grabbing" : hoveredBand ? "pointer" : "grab";
+      if (knobDrag) { canvas.style.cursor = "ns-resize"; return; }
+      if (panelHover) { canvas.style.cursor = panelKnobCursor(); return; }
+      canvas.style.cursor = helpHovered ? "default" : gainDrag ? "ns-resize" : draggedBand || rotating || panDrag ? "grabbing" : hoveredBand ? "pointer" : "grab";
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      if (overHelpButton(e)) return;
       touch();
+      const target = panelTarget(e);
+      if (target) {
+        const band = selectedBand;
+        if (e.button !== 0) return;
+        switch (target.kind) {
+          case "toggle":
+            panelOpen = !panelOpen;
+            if (panelOpen) updatePanelFit();
+            break;
+          case "previous": selectNeighbour(-1); break;
+          case "next": selectNeighbour(1); break;
+          case "type": setBandType(band!, FILTER_TYPES[target.index]); notify(); break;
+          case "stereo": band!.stereo = !band!.stereo; notify(); break;
+          case "mute": band!.muted = !band!.muted; notify(); break;
+          case "remove":
+            bands.splice(bands.indexOf(band!), 1);
+            selectedBand = null;
+            validateSelection();
+            notify();
+            break;
+          case "knob":
+            if (knobEnabled(band!, target.index)) {
+              canvas.setPointerCapture(e.pointerId);
+              knobDrag = { knob: target.index, lastY: e.clientY, position: knobPosition(band!, target.index) };
+              updateCursor();
+            }
+            break;
+        }
+        return;
+      }
+      if (e.button === 1) {
+        canvas.setPointerCapture(e.pointerId);
+        panDrag = { x: e.clientX, y: e.clientY };
+        hoveredBand = null;
+        view.yawVelocity = view.pitchVelocity = 0;
+        updateCursor();
+        return;
+      }
       if (e.button !== 0) return; // right button is mute (contextmenu), not drag
       const [px, py] = eventPos(e);
       canvas.setPointerCapture(e.pointerId);
       const band = hitBand(px, py);
+      if (band) selectedBand = band;
       if (band && !isCut(band) && (e.ctrlKey || e.metaKey)) {
         gainDrag = { band, startY: e.clientY, startGain: band.gainDb };
         hoveredBand = band;
@@ -638,7 +756,32 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const onPointerMove = (e: PointerEvent) => {
       pointerInside = true;
       touch();
+      if (knobDrag) {
+        if (selectedBand) {
+          knobDrag.position = clamp(knobDrag.position + (knobDrag.lastY - e.clientY) * (e.shiftKey ? KNOB_FINE_FACTOR : 1) / KNOB_PIXELS_FULL_RANGE, 0, 1);
+          knobDrag.lastY = e.clientY;
+          setKnobPosition(selectedBand, knobDrag.knob, knobDrag.position);
+          notify();
+        }
+        return;
+      }
+      panelHover = pressed || gainDrag || panDrag || rotating || draggedBand ? null : panelTarget(e);
+      if (panelHover) {
+        helpHovered = false;
+        hoveredBand = null;
+        updateCursor();
+        return;
+      }
       const [px, py] = eventPos(e);
+      helpHovered = !pressed && !gainDrag && !panDrag && overHelpButton(e);
+
+      if (panDrag) {
+        view.panX += e.clientX - panDrag.x;
+        view.panY += e.clientY - panDrag.y;
+        panDrag = { x: e.clientX, y: e.clientY };
+        clampPan();
+        return;
+      }
 
       if (gainDrag) {
         const db = gainDrag.startGain + (gainDrag.startY - e.clientY) * GAIN_DB_PER_PIXEL;
@@ -668,7 +811,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         rotateSamples.push({ t, dx, dy });
         while (rotateSamples.length && t - rotateSamples[0].t > 100) rotateSamples.shift();
       } else if (!pressed) {
-        hoveredBand = hitBand(px, py);
+        hoveredBand = helpHovered ? null : hitBand(px, py);
       }
 
       updateCursor();
@@ -689,19 +832,29 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           view.pitchVelocity = clamp((dy * ROTATE_SPEED) / span / 60, -0.15, 0.15);
         }
       }
+      // A plain click on empty space clears the highlight. An open panel always
+      // shows a band, so it keeps its selection.
+      if (e.type === "pointerup" && pressed && !pressed.band && !rotating && !panelOpen) selectedBand = null;
+
       rotating = false;
       draggedBand = null;
       gainDrag = null;
+      panDrag = null;
+      knobDrag = null;
       pressed = null;
       touch();
+      panelHover = panelTarget(e);
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       const [px, py] = eventPos(e);
-      hoveredBand = hitBand(px, py);
+      helpHovered = overHelpButton(e);
+      hoveredBand = helpHovered || panelHover ? null : hitBand(px, py);
       updateCursor();
     };
 
     const onPointerLeave = () => {
       pointerInside = false;
+      helpHovered = false;
+      panelHover = null;
       touch();
       if (!draggedBand) hoveredBand = null;
     };
@@ -710,26 +863,40 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // but flattens out and stops affecting the sound.
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
+      if (overHelpButton(e)) return;
       touch();
       if (e.ctrlKey) return; // macOS reports Ctrl+click as a right-click; that's the gain drag
+      if (panelTarget(e)) return;
       const [px, py] = eventPos(e);
       const hit = hitBand(px, py);
       if (!hit) return;
-      hit.muted = !hit.muted;
+      selectedBand = hit;
+      if (e.shiftKey) hit.stereo = !hit.stereo;
+      else hit.muted = !hit.muted;
       notify();
     };
 
     const onDoubleClick = (e: MouseEvent) => {
+      if (overHelpButton(e)) return;
       touch();
+      const target = panelTarget(e);
+      if (target) {
+        if (target.kind === "knob" && selectedBand && knobEnabled(selectedBand, target.index)) {
+          resetKnob(selectedBand, target.index);
+          notify();
+        }
+        return;
+      }
       if (e.ctrlKey || e.metaKey) return; // two quick gain drags shouldn't remove the band
       const [px, py] = eventPos(e);
       const hit = hitBand(px, py);
 
-      // Shift+double-click a band: cycle Peak -> Low cut -> High cut.
+      // Shift+double-click a band: cycle Peak -> Low cut -> High cut -> Low shelf -> High shelf.
       if (hit && e.shiftKey) {
         const next = FILTER_TYPES[(FILTER_TYPES.indexOf(hit.type ?? "peak") + 1) % FILTER_TYPES.length];
         hit.type = next;
         hit.slope ??= DEFAULT_CUT_SLOPE;
+        if (isShelf(hit)) hit.q = Math.min(hit.q, MAX_SHELF_Q);
         notify();
         return;
       }
@@ -752,17 +919,38 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const lifted = pickSphere(px, py, true, handleRadius(band));
       if (lifted) Object.assign(band, toLatLon(lifted));
       hoveredBand = band;
+      selectedBand = band;
       notify();
     };
 
     const onWheel = (e: WheelEvent) => {
-      touch();
       e.preventDefault();
+      if (overHelpButton(e)) return;
+      touch();
       // Some platforms turn shift+wheel into horizontal scrolling. Firefox can
       // report lines or pages instead of pixels; normalise to pixels (~100
       // per wheel notch) so steps feel the same everywhere.
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1;
       const delta = (e.deltaY !== 0 ? e.deltaY : e.deltaX) * unit;
+
+      const target = panelTarget(e);
+      if (target) {
+        if (target.kind === "knob" && selectedBand && knobEnabled(selectedBand, target.index)) {
+          let change: number;
+          if (knobIsStepped(selectedBand, target.index)) {
+            // One step per notch; small trackpad deltas add up.
+            slopeAccumulator += delta;
+            const steps = Math.trunc(slopeAccumulator / 100);
+            slopeAccumulator -= steps * 100;
+            change = -steps / (CUT_SLOPES.length - 1);
+          } else {
+            change = (-delta / 100 / 120) * (e.shiftKey ? KNOB_FINE_FACTOR : 1);
+          }
+          setKnobPosition(selectedBand, target.index, knobPosition(selectedBand, target.index) + change);
+          notify();
+        }
+        return;
+      }
       const [px, py] = eventPos(e);
 
       // Gain changes move the node, so keep a scroll gesture locked to the band
@@ -804,7 +992,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         if (e.altKey) band.range = snap(clamp((band.range ?? 0) + dbStep, -MAX_GAIN_DB, MAX_GAIN_DB));
         else if (e.ctrlKey || e.metaKey)
           band.threshold = snap(clamp((band.threshold ?? DEFAULT_THRESHOLD_DB) + dbStep, MIN_THRESHOLD_DB, MAX_THRESHOLD_DB));
-        else if (e.shiftKey) band.q = clamp(band.q * Math.exp(-delta * 0.002), MIN_Q, MAX_Q);
+        else if (e.shiftKey) band.q = clamp(band.q * Math.exp(-delta * 0.002), MIN_Q, isShelf(band) ? MAX_SHELF_Q : MAX_Q);
         else band.gainDb = snap(clamp(band.gainDb + dbStep, -MAX_GAIN_DB, MAX_GAIN_DB));
         if (band.range !== undefined && Math.abs(band.range) < 0.05) band.range = 0;
         hoveredBand = band;
@@ -815,6 +1003,9 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       view.zoom = clamp(view.zoom * Math.exp(-delta * 0.001), 0.25, 2.5);
     };
 
+    // Stops the browser's middle-click autoscroll from taking over a pan.
+    const onMouseDown = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+    canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
@@ -835,10 +1026,11 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     //   muted     hollow grey core, dimmed track, no arc
     const drawNode = (b: Band, dirs: Vec3[], dt: number) => {
       const [sx, sy, z] = bandScreenPos(b, dirs);
-      // Fade smoothly as the node turns away round the back.
-      const facing = 0.22 + 0.78 * clamp((z + 0.3) / 0.45, 0, 1);
+      const selected = b === selectedBand;
+      // Fade smoothly as the node turns away round the back; the selected band stays visible.
+      const facing = Math.max(selected ? 0.75 : 0, 0.22 + 0.78 * clamp((z + 0.3) / 0.45, 0, 1));
 
-      const target = b === draggedBand ? 1 : b === hoveredBand ? 0.7 : 0;
+      const target = b === draggedBand ? 1 : b === hoveredBand ? 0.7 : selected ? 0.85 : 0;
       const prev = nodeEmphasis.get(b.id) ?? 0;
       const emphasis = prev + (target - prev) * (1 - Math.exp(-dt / 0.08));
       nodeEmphasis.set(b.id, emphasis);
@@ -855,13 +1047,26 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
       ctx.globalAlpha = 1;
 
+      // Selected: a soft pale halo.
+      if (selected) {
+        const glowR = ringR * 2.8;
+        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
+        glow.addColorStop(0, `rgba(255,252,244,${0.3 * facing})`);
+        glow.addColorStop(1, "rgba(255,252,244,0)");
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       // Soft glow (skipped when muted).
       if (!b.muted) {
-        ctx.globalCompositeOperation = "lighter";
         const glowR = ringR * 2.2;
         const glow = ctx.createRadialGradient(sx, sy, core * 0.5, sx, sy, glowR);
         glow.addColorStop(0, rgbString(colour, (0.28 + 0.2 * emphasis) * facing));
         glow.addColorStop(1, rgbString(colour, 0));
+        ctx.globalCompositeOperation = "source-over";
         ctx.fillStyle = glow;
         ctx.beginPath();
         ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
@@ -881,8 +1086,8 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       // Track.
       ctx.beginPath();
       ctx.arc(sx, sy, ringR, 0, Math.PI * 2);
-      ctx.lineWidth = 1.5 * dpr;
-      ctx.strokeStyle = b.muted ? "rgba(138,134,124,0.25)" : "rgba(232,228,218,0.22)";
+      ctx.lineWidth = (selected ? 1.8 : 1.5) * dpr;
+      ctx.strokeStyle = selected ? "rgba(255,252,244,0.9)" : b.muted ? "rgba(138,134,124,0.25)" : "rgba(232,228,218,0.22)";
       ctx.stroke();
 
       // Gain arc from 12 o'clock, showing the band's gain right now (it moves
@@ -937,9 +1142,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       } else {
         // Flat colour with a soft highlight toward the top-left, so it reads
         // as a ball without heavy shading.
-        const shade = ctx.createRadialGradient(sx - core * 0.35, sy - core * 0.4, core * 0.1, sx, sy, core);
+        const hx = sx - core * 0.35, hy = sy - core * 0.4;
+        const shade = ctx.createRadialGradient(hx, hy, 0, hx, hy, core * 1.53);
         shade.addColorStop(0, rgbString(lerpRGB(colour, [255, 255, 255], 0.45)));
-        shade.addColorStop(0.6, rgbString(colour));
+        shade.addColorStop(0.5, rgbString(colour));
         shade.addColorStop(1, rgbString(lerpRGB(colour, [17, 17, 16], 0.3)));
         ctx.fillStyle = shade;
         ctx.fill();
@@ -947,6 +1153,16 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           ctx.lineWidth = 1.2 * dpr;
           ctx.strokeStyle = `rgba(255,252,244,${0.85 * emphasis})`;
           ctx.stroke();
+        }
+      }
+
+      // Stereo band: a dot either side of the ring, for the two channels it acts on.
+      if (b.stereo) {
+        ctx.fillStyle = `rgba(235,232,224,${(b.muted ? 0.35 : 0.85) * facing})`;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.arc(sx + side * (ringR + 4.5 * dpr), sy, 1.7 * dpr, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
 
@@ -965,6 +1181,23 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         ctx.stroke();
       }
 
+      // Shelf glyph: a step, raised on the shelf's side when boosting and
+      // lowered when cutting.
+      if (isShelf(b)) {
+        const k = core * 0.55;
+        const dir = b.type === "lowshelf" ? 1 : -1;
+        const rise = (live < 0 ? -1 : 1) * k * 0.45;
+        ctx.beginPath();
+        ctx.moveTo(sx - dir * k, sy - rise);
+        ctx.lineTo(sx - dir * k * 0.25, sy - rise);
+        ctx.lineTo(sx + dir * k * 0.25, sy + rise);
+        ctx.lineTo(sx + dir * k, sy + rise);
+        ctx.lineWidth = 1.4 * dpr;
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = b.muted ? "#6e6b64" : neutral ? "rgba(235,232,224,0.8)" : "rgba(17,17,16,0.85)";
+        ctx.stroke();
+      }
+
       ctx.globalAlpha = 1;
     };
 
@@ -973,14 +1206,15 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const lines = isCut(b)
         ? [
             `${b.type === "lowcut" ? "Low cut" : "High cut"}  ${formatFreq(latToFreq(b.lat))}`,
-            `${b.slope ?? DEFAULT_CUT_SLOPE} dB/oct  ·  ${panLabel(b.lon)}`,
+            `${b.slope ?? DEFAULT_CUT_SLOPE} dB/oct  ·  ${b.stereo ? "Stereo" : panLabel(b.lon)}`,
             midSideLabel(b.lon),
           ]
         : [
-            `${formatFreq(latToFreq(b.lat))}  ${formatGain(b.gainDb)}`,
-            `Q ${b.q.toFixed(2)}  ·  ${panLabel(b.lon)}`,
+            `${b.type === "lowshelf" ? "Low shelf  " : b.type === "highshelf" ? "High shelf  " : ""}${formatFreq(latToFreq(b.lat))}  ${formatGain(b.gainDb)}`,
+            `Q ${b.q.toFixed(2)}  ·  ${b.stereo ? "Stereo" : panLabel(b.lon)}`,
             midSideLabel(b.lon),
           ];
+      if (b.stereo) lines.splice(2, 1); // Mid / Side share doesn't apply
       if (b.range && !isCut(b)) {
         lines.push(`Dyn ${formatGain(b.range)}  ·  Thresh ${formatDb(b.threshold ?? DEFAULT_THRESHOLD_DB)} dB`);
         const dyn = liveDynamics?.get(b.id);
@@ -988,9 +1222,9 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       }
       if (b.muted) lines.push("Muted · right-click to unmute");
       const fontPx = 12 * dpr;
-      ctx.font = `${fontPx}px system-ui, sans-serif`;
+      ctx.font = `${fontPx}px ${UI_FONT}`;
       const padding = 6 * dpr;
-      const lineHeight = fontPx * 1.35;
+      const lineHeight = Math.round(fontPx * 1.35); // whole pixels, so the lines space evenly
       const width = Math.max(...lines.map((l) => ctx.measureText(l).width)) + padding * 2;
       const height = lineHeight * lines.length + padding * 2 - (lineHeight - fontPx);
       let x = sx + 16 * dpr;
@@ -1010,6 +1244,61 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       ctx.fillStyle = TEXT_COLOUR;
       ctx.textBaseline = "top";
       lines.forEach((l, i) => ctx.fillText(l, x + padding, y + padding + i * lineHeight));
+    };
+
+    // The ? button, and the list of controls that appears while hovering over it.
+    const drawHelp = (dt: number) => {
+      helpAmount += ((helpHovered ? 1 : 0) - helpAmount) * (1 - Math.exp(-dt / 0.08));
+
+      const cx = canvas.width - HELP_BUTTON_INSET * dpr;
+      const cy = canvas.height - HELP_BUTTON_INSET * dpr;
+      const radius = HELP_BUTTON_RADIUS * dpr;
+      const graphite: RGB = [17, 17, 16];
+      const text: RGB = [232, 228, 218];
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = rgbString(graphite, 0.7);
+      ctx.fill();
+      ctx.lineWidth = dpr;
+      ctx.strokeStyle = rgbString(WARM_GREY, 0.45 + 0.4 * helpAmount);
+      ctx.stroke();
+      ctx.font = `bold ${12 * dpr}px ${UI_FONT}`;
+      ctx.fillStyle = rgbString(text, 0.55 + 0.45 * helpAmount);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", cx, cy);
+      ctx.textAlign = "left";
+
+      if (helpAmount < 0.01) return;
+
+      ctx.font = `${12 * dpr}px ${UI_FONT}`;
+      const padding = 10 * dpr, gap = 18 * dpr, lineHeight = Math.round(12 * dpr * 1.45);
+      const gestureWidth = Math.max(...HELP_ROWS.map(([gesture]) => ctx.measureText(gesture).width));
+      const actionWidth = Math.max(...HELP_ROWS.map(([, action]) => ctx.measureText(action).width));
+      const width = padding * 2 + gestureWidth + gap + actionWidth;
+      const height = padding * 2 + lineHeight * HELP_ROWS.length;
+      const x = Math.max(8 * dpr, cx + radius - width);
+      const y = Math.max(8 * dpr, cy - radius - 8 * dpr - height);
+
+      ctx.fillStyle = rgbString(graphite, 0.92 * helpAmount);
+      ctx.strokeStyle = rgbString(WARM_GREY, 0.45 * helpAmount);
+      ctx.lineWidth = dpr;
+      ctx.beginPath();
+      ctx.roundRect(x, y, width, height, 6 * dpr);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textBaseline = "top";
+      HELP_ROWS.forEach(([gesture, action], i) => {
+        const rowY = y + padding + i * lineHeight;
+        ctx.fillStyle = rgbString(text, 0.6 * helpAmount);
+        ctx.fillText(gesture, x + padding, rowY);
+        ctx.fillStyle = rgbString(text, helpAmount);
+        ctx.fillText(action, x + padding + gestureWidth + gap, rowY);
+      });
     };
 
     // A band's vortex: rings of particles lying on the (bumped or dented)
@@ -1035,7 +1324,6 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const type = b.type!;
       const slope = b.slope ?? DEFAULT_CUT_SLOPE;
       const towardPole = type === "lowcut" ? -1 : 1;
-      const baseSize = radiusPx() * 0.05;
       const count = CUT_CONTOURS_DB.length;
       let lat = b.lat;
       for (let k = 0; ; ++k) {
@@ -1055,19 +1343,63 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         const ringFade = amount * (k < count ? 0.35 + 0.55 * shape : CUT_FLOOR_RING_ALPHA);
         const t = (k + 1) / VORTEX_RINGS;
         const phase = -time * 0.5 / (0.35 + t) + t * 2.4; // same drift as a peak's rings
-        const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
-        const points = Math.max(12, Math.round(76 * cosLat)); // even spacing as rings shrink
-        for (let j = 0; j < points; ++j) {
-          const lon = (j / points) * Math.PI * 2 + phase;
-          const overlap = axisOverlap(b.lon, lon); // only where the cut acts
-          if (overlap < 0.02) continue;
-          const dir: Vec3 = [cosLat * Math.sin(lon), sinLat, cosLat * Math.cos(lon)];
-          const r = 1 + surfaceDisplacement(bands, dirs, dir);
-          const [sx, sy, z] = toScreen(toView([dir[0] * r, dir[1] * r, dir[2] * r]));
-          const facing = 0.2 + 0.8 * clamp((z + 0.5) / 1.0, 0, 1);
-          const size = baseSize * 1.2 * (CAMERA_DISTANCE / (CAMERA_DISTANCE - z));
-          sink.add(style, sx, sy, size, facing * ringFade * overlap);
-        }
+        drawLatitudeRing(b, dirs, lat, phase, style, ringFade);
+      }
+    };
+
+    // Particles round a circle of constant latitude, only where the band acts.
+    const drawLatitudeRing = (b: Band, dirs: Vec3[], lat: number, phase: number, style: ReturnType<typeof ringStyle>, fade: number) => {
+      const baseSize = radiusPx() * 0.05;
+      const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
+      const points = Math.max(12, Math.round(76 * cosLat)); // even spacing as rings shrink
+      for (let j = 0; j < points; ++j) {
+        const lon = (j / points) * Math.PI * 2 + phase;
+        const overlap = bandOverlap(b, lon);
+        if (overlap < 0.02) continue;
+        const dir: Vec3 = [cosLat * Math.sin(lon), sinLat, cosLat * Math.cos(lon)];
+        const r = 1 + surfaceDisplacement(bands, dirs, dir);
+        const [sx, sy, z] = toScreen(toView([dir[0] * r, dir[1] * r, dir[2] * r]));
+        const facing = 0.2 + 0.8 * clamp((z + 0.5) / 1.0, 0, 1);
+        const size = baseSize * 1.2 * (CAMERA_DISTANCE / (CAMERA_DISTANCE - z));
+        sink.add(style, sx, sy, size, facing * fade * overlap);
+      }
+    };
+
+    // A stereo peak's vortex: rings round the sphere on either side of its latitude.
+    const BELT_RINGS_PER_SIDE = 3;
+    const drawBeltRings = (b: Band, dirs: Vec3[], time: number, strength: number) => {
+      const gain = displayGain(b);
+      const w = bandWidth(b);
+      const spin = gain > 0 ? 0.5 : -0.5;
+      for (let k = -BELT_RINGS_PER_SIDE; k <= BELT_RINGS_PER_SIDE; ++k) {
+        const offset = k / BELT_RINGS_PER_SIDE;
+        const angle = offset * w * 1.5;
+        const lat = b.lat + angle;
+        if (Math.abs(lat) > CUT_RING_POLE_LIMIT) continue;
+        const t = Math.abs(offset);
+        const phase = time * spin / (0.35 + t) + offset * 2.4;
+        const ringFade = strength * (1.15 - t * 0.75);
+        drawLatitudeRing(b, dirs, lat, phase, ringStyle(gain * Math.exp(-2 * (1 - Math.cos(angle)) / (w * w))), ringFade);
+      }
+    };
+
+    // A shelf's vortex: evenly spaced rings from the shelf frequency out to its
+    // pole, lying on the raised or lowered surface and fading with its height.
+    const drawShelfRings = (b: Band, dirs: Vec3[], time: number, amount: number) => {
+      const gain = displayGain(b);
+      if (Math.abs(gainShape(gain)) * amount < 0.01) return;
+      const towardPole = b.type === "lowshelf" ? -1 : 1;
+      const spin = gain > 0 ? 0.5 : -0.5;
+      for (let k = 0; ; ++k) {
+        const lat = b.lat + towardPole * k * CUT_FLOOR_RING_SPACING;
+        if (towardPole * lat > CUT_RING_POLE_LIMIT) break;
+        if (towardPole * lat < -CUT_RING_POLE_LIMIT) continue;
+        const ringDb = shelfResponseDb(b, gain, latToFreq(lat));
+        const style = ringStyle(ringDb);
+        const ringFade = amount * Math.min(1, Math.abs(gainShape(ringDb)) * 1.4);
+        const t = (k + 1) / VORTEX_RINGS;
+        const phase = time * spin / (0.35 + t) + t * 2.4;
+        drawLatitudeRing(b, dirs, lat, phase, style, ringFade);
       }
     };
 
@@ -1076,8 +1408,11 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const amount = previous + ((b.muted ? 0 : 1) - previous) * (1 - Math.exp(-dt / 0.12));
       vortexAmount.set(b.id, amount);
       if (isCut(b)) { drawCutRings(b, dirs, time, amount); return; }
+      if (isShelf(b)) { drawShelfRings(b, dirs, time, amount); return; }
       const strength = Math.abs(gainShape(displayGain(b))) * amount;
       if (strength < 0.01) return;
+
+      if (b.stereo) { drawBeltRings(b, dirs, time, strength); return; }
 
       const gain = displayGain(b);
       const c = bandDirection(b);
@@ -1144,6 +1479,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         view.yaw += AUTO_ROTATE * autoBlend * frameScale;
       }
       view.pitch = clamp(view.pitch, -1.4, 1.4);
+      clampPan(); // the window may have shrunk
 
       const w = canvas.width, h = canvas.height;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1199,17 +1535,43 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
       const tLoop0 = performance.now();
       specTotal += tLoop0 - tSpec0;
+      const panelGoal = panelOpen ? 1 : 0;
+      panelAmount += (panelGoal - panelAmount) * (1 - Math.exp(-dt / 0.08));
+      if (Math.abs(panelGoal - panelAmount) < 0.002) panelAmount = panelGoal;
+      if (panelOpen && (canvas.clientWidth !== panelFitWidth || canvas.clientHeight !== panelFitHeight)) updatePanelFit();
+
       // Bands, prepared once per frame. Muted bands drop out.
-      let nb = 0, nc = 0;
+      let nb = 0, nc = 0, ns = 0, nr = 0;
       for (const b of bands) {
         if (b.muted) continue;
         if (isCut(b)) {
           cLow[nc] = b.type === "lowcut" ? 1 : 0;
           cFc[nc] = latToFreq(b.lat);
           cTwoN[nc] = (2 * (b.slope ?? DEFAULT_CUT_SLOPE)) / 6;
-          cCos[nc] = Math.cos(b.lon);
-          cSin[nc] = Math.sin(b.lon);
+          cCos[nc] = b.stereo ? 0 : Math.cos(b.lon);
+          cSin[nc] = b.stereo ? 0 : Math.sin(b.lon);
+          cBias[nc] = b.stereo ? 2 : 1; // makes the overlap below 1 everywhere
           nc++;
+          continue;
+        }
+        if (isShelf(b)) {
+          sLow[ns] = b.type === "lowshelf" ? 1 : 0;
+          sFc[ns] = latToFreq(b.lat);
+          sA[ns] = shelfA(displayGain(b));
+          sK[ns] = shelfK(sA[ns], b.q);
+          sCos[ns] = b.stereo ? 0 : Math.cos(b.lon);
+          sSin[ns] = b.stereo ? 0 : Math.sin(b.lon);
+          sBias[ns] = b.stereo ? 2 : 1;
+          ns++;
+          continue;
+        }
+        if (b.stereo) {
+          const w = bandWidth(b);
+          rSin[nr] = Math.sin(b.lat);
+          rCos[nr] = Math.cos(b.lat);
+          rAmp[nr] = gainDisplacement(displayGain(b));
+          rInvW2[nr] = 1 / (w * w);
+          nr++;
           continue;
         }
         const bd = bandDirection(b);
@@ -1222,7 +1584,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
       // View / projection constants (see toView and toScreen).
       syncTrig();
-      const cx = w / 2, cyPx = h / 2, rPx = radiusPx();
+      const cx = centreX(), cyPx = centreY(), rPx = radiusPx();
       const breathScale = 1 + breath;
       const sizeBase = PARTICLE_SIZE * baseSize;
       const audioDim = 1 - 0.3 * audioMix; // = 1 + (0.7 - 1) * audioMix
@@ -1253,6 +1615,15 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           if (e < 12) disp += bAmp[k] * Math.exp(-e);
         }
 
+        // Stereo peaks: the same bump, measured in latitude only.
+        if (nr > 0) {
+          const cosLat = Math.sqrt(Math.max(0, 1 - dy * dy));
+          for (let k = 0; k < nr; ++k) {
+            const e = 2 * (1 - (cosLat * rCos[k] + dy * rSin[k])) * rInvW2[k];
+            if (e < 12) disp += rAmp[k] * Math.exp(-e);
+          }
+        }
+
         // Cuts: Butterworth response at this particle's frequency (as in
         // cutDisplacement), weighted by stereo-axis overlap.
         for (let k = 0; k < nc; ++k) {
@@ -1261,8 +1632,14 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           if (pw < 1e-4) continue; // < 0.0005 dB: nothing to show
           const db = -10 * Math.log10(1 + pw);
           const t = Math.min(1, -db / MAX_GAIN_DB);
-          const overlap = (1 + pCosLon[i] * cCos[k] + pSinLon[i] * cSin[k]) / 2;
+          const overlap = (cBias[k] + pCosLon[i] * cCos[k] + pSinLon[i] * cSin[k]) / 2;
           disp -= Math.pow(t, 0.7) * MAX_CUT_DISPLACEMENT * overlap;
+        }
+        // Shelves: their response at this frequency, weighted by stereo overlap.
+        for (let k = 0; k < ns; ++k) {
+          const ratio = pFreq[i] / sFc[k];
+          const overlap = (sBias[k] + pCosLon[i] * sCos[k] + pSinLon[i] * sSin[k]) / 2;
+          disp += gainDisplacement(shelfDbAt(!!sLow[k], sA[k], sK[k], ratio * ratio)) * overlap;
         }
         if (disp > MAX_BOOST_DISPLACEMENT || disp < -MAX_CUT_DISPLACEMENT) disp = limitDisplacement(disp);
 
@@ -1369,6 +1746,11 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const labelled = draggedBand ?? hoveredBand;
       if (labelled) drawLabel(labelled, dirs);
 
+      // A closed panel leaves this alone, so only a clicked band gets highlighted.
+      if (panelOpen) validateSelection();
+      drawBandPanel(ctx, panelLayout(panelAmount), dpr, panelAmount, selectedBand, panelHover, knobDrag ? knobDrag.knob : -1);
+      drawHelp(dt);
+
       ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
       cpuTotal += performance.now() - cpuStart;
@@ -1379,6 +1761,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       cancelAnimationFrame(frame);
       observer.disconnect();
       glSink?.dispose();
+      canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);

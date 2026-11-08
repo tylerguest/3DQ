@@ -1,0 +1,765 @@
+/*
+  ==============================================================================
+
+    SphereField: see SphereField.h. The look and motion here are the same as the
+    browser preview's (ui/src/Sphere.tsx).
+
+  ==============================================================================
+*/
+
+#include "SphereField.h"
+
+namespace sphere
+{
+
+namespace
+{
+struct RGB
+{
+    float r, g, b;
+};
+
+RGB mixRGB (RGB a, RGB b, float t)
+{
+    return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t };
+}
+
+constexpr int surfacePoints = 16000;
+constexpr int hazePoints = 2200;
+constexpr int numColourBuckets = 32;
+constexpr int numRingColours = 24;
+constexpr float poleDim = 0.82f;
+constexpr float particleAlpha = 0.5f;
+constexpr float particleSize = 0.78f;
+constexpr float midLineWidth = 0.035f;
+
+// Frequency colours by position on the log axis. They stay clear of orange and
+// red, which only ever mean boost and cut.
+struct ColourStop
+{
+    float t;
+    RGB rgb;
+};
+
+constexpr std::array<ColourStop, 5> frequencyColours {{
+    { 0.0f,  { 104, 128, 232 } }, // sub: blue
+    { 0.3f,  {  74, 182, 182 } }, // bass: teal
+    { 0.52f, { 140, 202, 118 } }, // mids: green
+    { 0.75f, { 232, 208, 122 } }, // presence: straw
+    { 1.0f,  { 238, 232, 220 } }, // air: bone
+}};
+
+constexpr std::array<RGB, 3> boostRingRamp {{ { 255, 232, 176 }, { 255, 170, 60 }, { 255, 104, 14 } }};
+constexpr std::array<RGB, 3> cutRingRamp   {{ { 255, 200, 186 }, { 235, 70, 62 }, { 186, 16, 22 } }};
+
+RGB colourForFrequency (float t)
+{
+    size_t i = 0;
+    while (i < frequencyColours.size() - 2 && t > frequencyColours[i + 1].t)
+        ++i;
+
+    const auto& a = frequencyColours[i];
+    const auto& b = frequencyColours[i + 1];
+    const auto c = mixRGB (a.rgb, b.rgb, std::clamp ((t - a.t) / (b.t - a.t), 0.0f, 1.0f));
+    const float y = std::sin ((t * 2.0f - 1.0f) * halfPi);
+    const float k = 1.0f - (1.0f - poleDim) * y * y;
+    return { c.r * k, c.g * k, c.b * k };
+}
+
+SpriteStyle makeStyle (RGB c, float profile)
+{
+    return { c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, profile };
+}
+
+int bucketOf (float y)
+{
+    return (int) std::lround ((std::asin (std::clamp (y, -1.0f, 1.0f)) / pi + 0.5f) * (numColourBuckets - 1));
+}
+
+float powerToLevel (float power)
+{
+    const float db = 10.0f * std::log10 (power + 1.0e-20f);
+    return std::clamp ((db + 80.0f) / 60.0f, 0.0f, 1.0f);
+}
+
+// Spectrum smoothing (s): quick enough to follow drums, slow enough to average
+// out the frame-to-frame noise of the analysis.
+constexpr float spectrumAttack = 0.035f;
+constexpr float spectrumRelease = 0.24f;
+constexpr std::array<float, 5> blurTaps { 0.06f, 0.24f, 0.4f, 0.24f, 0.06f };
+constexpr int bassBands = 12; // 20 Hz .. ~110 Hz
+
+constexpr float springOmega = 2.0f * pi * 4.5f;
+constexpr float springDamping = 0.42f;
+constexpr float springStep = 1.0f / 120.0f;
+
+constexpr float audioOmega = 2.0f * pi * 4.2f; // critically damped: glides with the music
+constexpr float audioHeight = 0.28f;           // radius added at the loudest spot in the mix
+constexpr float audioWindow = 36.0f / 60.0f;   // moves over the top 36 dB, in level units
+constexpr float audioCentring = 0.7f;          // how much of the average lift is taken back out
+constexpr float audioSurge = 0.8f;
+constexpr float audioSurgeMax = 0.2f;
+constexpr float surfaceKnee = 1.3f;
+constexpr float surfaceRoom = 0.3f;
+
+constexpr float energyMemory = 6.0f;           // seconds averaged while audio plays
+constexpr float energyFade = 20.0f;            // seconds to fade out after audio stops
+constexpr float energyRange = 24.0f / 60.0f;   // shows the top 24 dB, in level units
+
+constexpr int vortexRings = 6;
+constexpr int beltRingsPerSide = 3;
+constexpr int vortexPoints = 56;
+constexpr std::array<float, 7> cutContoursDb { 1.5f, 3, 6, 12, 18, 24, 30 };
+constexpr float cutFloorRingSpacing = 0.26f;
+constexpr float cutFloorRingAlpha = 0.3f;
+constexpr float cutRingPoleLimit = halfPi - 0.08f;
+
+float randomFloat()
+{
+    static thread_local juce::Random random;
+    return random.nextFloat();
+}
+}
+
+SphereField::SphereField()
+{
+    vortexAmount.fill (-1.0f);
+    buildParticles();
+    buildStyles();
+
+    for (int c = 0; c < lonCells; ++c)
+    {
+        const float lon = ((float) c / lonCells) * twoPi - pi;
+        const float phi = pi / 4.0f + lon / 2.0f;
+        const float cp = std::cos (phi), sp = std::sin (phi);
+        cellLL[(size_t) c] = cp * cp;
+        cellRR[(size_t) c] = sp * sp;
+        cellLR[(size_t) c] = 2.0f * cp * sp;
+    }
+}
+
+void SphereField::buildParticles()
+{
+    numParticles = surfacePoints + hazePoints;
+    const auto n = (size_t) numParticles;
+
+    for (auto* v : { &pX, &pY, &pZ, &pShell, &pSize, &pTwinkle, &pTwinkleRate, &pMid, &pFreq, &pCosLon, &pSinLon,
+                     &specPos, &lonPos, &springOffset, &springVelocity, &audioOffset, &audioVelocity, &energy })
+        v->assign (n, 0.0f);
+
+    pBucket.assign (n, 0);
+
+    const float goldenAngle = pi * (3.0f - std::sqrt (5.0f));
+    const float sizeScale = std::sqrt (5000.0f / surfacePoints);
+    // Fibonacci lattice, jittered so its spiral rows don't show as moire stripes.
+    const float spacing = std::sqrt (4.0f * pi / surfacePoints);
+    auto jitter = [spacing] { return (randomFloat() - 0.5f) * spacing * 0.7f; };
+
+    for (int i = 0; i < numParticles; ++i)
+    {
+        const auto s = (size_t) i;
+        float x, y, z, shell;
+
+        if (i < surfacePoints)
+        {
+            const float y0 = 1.0f - (((float) i + 0.5f) / surfacePoints) * 2.0f;
+            const float lat = std::clamp (std::asin (y0) + jitter(), -halfPi, halfPi);
+            const float r = std::cos (lat);
+            const float theta = goldenAngle * (float) i + jitter() / std::max (r, 0.05f);
+            x = std::cos (theta) * r;
+            y = std::sin (lat);
+            z = std::sin (theta) * r;
+            shell = 1.0f + (randomFloat() - 0.5f) * 0.02f;
+            pSize[s] = (0.5f + randomFloat()) * sizeScale;
+            pTwinkleRate[s] = 0.6f + randomFloat() * 1.4f;
+        }
+        else
+        {
+            // Sparse haze just inside / outside the shell.
+            const float u = randomFloat() * 2.0f - 1.0f;
+            const float theta = randomFloat() * twoPi;
+            const float r = std::sqrt (1.0f - u * u);
+            x = r * std::cos (theta);
+            y = u;
+            z = r * std::sin (theta);
+            shell = 0.85f + randomFloat() * 0.3f;
+            pSize[s] = (0.3f + randomFloat() * 0.6f) * sizeScale;
+            pTwinkleRate[s] = 0.4f + randomFloat() * 0.8f;
+        }
+
+        pX[s] = x;
+        pY[s] = y;
+        pZ[s] = z;
+        pShell[s] = shell;
+        pBucket[s] = bucketOf (y);
+        pTwinkle[s] = randomFloat() * twoPi;
+
+        // Mid (centre pan) meridian: lon 0 is the x = 0, z > 0 half of the sphere.
+        const float w = std::exp (-(x * x) / (midLineWidth * midLineWidth));
+        pMid[s] = z > 0 && shell > 0.99f && shell < 1.01f && w > 0.05f ? w : 0.0f;
+
+        const float lat = std::asin (std::clamp (y, -1.0f, 1.0f));
+        const float lon = std::atan2 (x, z);
+        pFreq[s] = latToFreq (lat);
+        pCosLon[s] = std::cos (lon);
+        pSinLon[s] = std::sin (lon);
+
+        const float t = (lat / halfPi + 1.0f) / 2.0f;
+        specPos[s] = std::clamp (t * numSpectrumBands - 0.5f, 0.0f, (float) numSpectrumBands - 1.0f);
+        lonPos[s] = ((lon + pi) / twoPi) * lonCells;
+    }
+}
+
+void SphereField::buildStyles()
+{
+    for (int i = 0; i < numColourBuckets; ++i)
+        particleStyles.push_back (makeStyle (colourForFrequency ((float) i / (numColourBuckets - 1)), 0.0f));
+
+    midStyle = makeStyle ({ 255, 252, 244 }, 1.0f);
+
+    auto rampColour = [] (const std::array<RGB, 3>& ramp, float t)
+    {
+        return t < 0.5f ? mixRGB (ramp[0], ramp[1], t * 2.0f) : mixRGB (ramp[1], ramp[2], t * 2.0f - 1.0f);
+    };
+
+    for (int i = 0; i < numRingColours; ++i)
+    {
+        const float t = (float) i / (numRingColours - 1);
+        boostRingStyles.push_back (makeStyle (rampColour (boostRingRamp, t), 1.0f));
+        cutRingStyles.push_back (makeStyle (rampColour (cutRingRamp, t), 1.0f));
+    }
+}
+
+// The curve opens up the everyday range, so 3 dB and 9 dB look different as
+// well as 12 dB and 30 dB.
+const SpriteStyle& SphereField::ringStyle (float db) const
+{
+    const auto index = (size_t) std::lround (std::pow (std::min (1.0f, std::abs (db) / maxGainDb), 0.6f) * (numRingColours - 1));
+    return db > 0 ? boostRingStyles[index] : cutRingStyles[index];
+}
+
+void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float dt)
+{
+    const float attack = 1.0f - std::exp (-dt / spectrumAttack);
+    const float release = 1.0f - std::exp (-dt / spectrumRelease);
+    float peak = 0;
+
+    for (size_t b = 0; b < (size_t) numSpectrumBands; ++b)
+    {
+        // One coefficient for ll, rr and lr together, so lr can't outgrow them.
+        const float k = spectrum.ll[b] + spectrum.rr[b] > heldLL[b] + heldRR[b] ? attack : release;
+        heldLL[b] += (spectrum.ll[b] - heldLL[b]) * k;
+        heldRR[b] += (spectrum.rr[b] - heldRR[b]) * k;
+        heldLR[b] += (spectrum.lr[b] - heldLR[b]) * k;
+        peak = std::max ({ peak, heldLL[b], heldRR[b] });
+    }
+
+    // Blur across frequency so single harmonics don't show up as rings on the sphere.
+    auto blur = [] (const auto& src, auto& dst)
+    {
+        for (int b = 0; b < numSpectrumBands; ++b)
+        {
+            float sum = 0;
+            for (int j = -2; j <= 2; ++j)
+                sum += blurTaps[(size_t) (j + 2)] * src[(size_t) std::clamp (b + j, 0, numSpectrumBands - 1)];
+            dst[(size_t) b] = sum;
+        }
+    };
+
+    blur (heldLL, smoothLL);
+    blur (heldRR, smoothRR);
+    blur (heldLR, smoothLR);
+
+    const float target = powerToLevel (peak) > 0.02f ? 1.0f : 0.0f;
+    audioMix += (target - audioMix) * (1.0f - std::pow (0.94f, dt * 60.0f));
+
+    float bass = 0;
+    for (size_t b = 0; b < (size_t) bassBands; ++b)
+        bass += (heldLL[b] + heldRR[b]) / 2.0f;
+
+    const float bassLevel = powerToLevel (bass);
+    bassAverage += (bassLevel - bassAverage) * (1.0f - std::exp (-dt / 0.35f));
+    bassOnset = std::max (0.0f, bassLevel - bassAverage) * audioMix;
+}
+
+void SphereField::updateLevelTable()
+{
+    for (size_t b = 0; b < (size_t) numSpectrumBands; ++b)
+        for (size_t c = 0; c < (size_t) lonCells; ++c)
+            levelTable[b * lonCells + c] = powerToLevel (std::max (0.0f, cellLL[c] * smoothLL[b] + cellRR[c] * smoothRR[b] + cellLR[c] * smoothLR[b]));
+}
+
+// Particle's level in a band, interpolated around in longitude. Longitude -pi
+// and +pi are both the back (Side), so the grid wraps.
+float SphereField::levelInBand (int particle, int band) const
+{
+    const auto row = (size_t) std::clamp (band, 0, numSpectrumBands - 1) * lonCells;
+    const float x = lonPos[(size_t) particle];
+    const int whole = (int) x;
+    const auto c0 = (size_t) (whole % lonCells);
+    const auto c1 = (c0 + 1) % lonCells;
+    return levelTable[row + c0] + (levelTable[row + c1] - levelTable[row + c0]) * (x - (float) whole);
+}
+
+float SphereField::audioLevelAt (int particle) const
+{
+    const float sp = specPos[(size_t) particle];
+    const int b = (int) sp;
+    const float t = sp - (float) b;
+    const float p0 = levelInBand (particle, b - 1), p1 = levelInBand (particle, b);
+    const float p2 = levelInBand (particle, b + 1), p3 = levelInBand (particle, b + 2);
+    const float v = p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
+    return std::clamp (v, 0.0f, 1.0f);
+}
+
+void SphereField::addRingDot (Vec3 dir, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                              const SpriteStyle& style, float alpha, SpriteList& out) const
+{
+    const float r = 1.0f + surfaceDisplacement (bands, dirs, dir);
+    const auto s = camera.toScreen (camera.toView ({ dir.x * r, dir.y * r, dir.z * r }));
+    const float facing = 0.2f + 0.8f * std::clamp (s.z + 0.5f, 0.0f, 1.0f);
+    const float size = camera.radiusPx() * 0.05f * 1.2f * (cameraDistance / (cameraDistance - s.z));
+    out.add (style, s.x, s.y, size, facing * alpha);
+}
+
+// Particles round a circle of constant latitude, only where the band acts.
+void SphereField::addLatitudeRing (const Band& b, float lat, float phase, const SpriteStyle& style, float fade, const BandSet& bands,
+                                   const BandDirections& dirs, const Camera& camera, SpriteList& out) const
+{
+    const float sinLat = std::sin (lat), cosLat = std::cos (lat);
+    const int points = std::max (12, (int) std::lround (76.0f * cosLat));
+
+    for (int j = 0; j < points; ++j)
+    {
+        const float lon = ((float) j / (float) points) * twoPi + phase;
+        const float overlap = bandOverlap (b, lon);
+        if (overlap < 0.02f)
+            continue;
+
+        addRingDot ({ cosLat * std::sin (lon), sinLat, cosLat * std::cos (lon) }, bands, dirs, camera, style, fade * overlap, out);
+    }
+}
+
+// A cut's vortex: swirling rings at constant latitude down the carved cap. The
+// first ones are contours at fixed depths, so they bunch up on a steep slope;
+// past the last contour evenly spaced rings carry on across the floor.
+void SphereField::addCutRings (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                               float time, float amount, SpriteList& out)
+{
+    if (amount < 0.01f)
+        return;
+
+    const float towardPole = b.type == FilterType::lowCut ? -1.0f : 1.0f;
+    const float radiansPerOctave = pi / std::log2 (threedq::maxFreq / threedq::minFreq);
+    const int contours = (int) cutContoursDb.size();
+    float lat = b.lat;
+
+    for (int k = 0;; ++k)
+    {
+        if (k < contours)
+        {
+            // Butterworth inverted: octaves past the cutoff where it reaches this depth.
+            const float octaves = std::log2 (std::pow (10.0f, cutContoursDb[(size_t) k] / 10.0f) - 1.0f) / (2.0f * ((float) b.slope / 6.0f));
+            lat = b.lat + towardPole * octaves * radiansPerOctave;
+        }
+        else
+        {
+            lat += towardPole * cutFloorRingSpacing;
+        }
+
+        if (towardPole * lat > cutRingPoleLimit)
+            break;
+        if (towardPole * lat < -cutRingPoleLimit)
+            continue;
+
+        const float ringDb = cutResponseDb (b.type, latToFreq (b.lat), b.slope, latToFreq (lat));
+        const auto& style = ringStyle (ringDb);
+        const float shape = -gainShape (ringDb);
+        const float ringFade = amount * (k < contours ? 0.35f + 0.55f * shape : cutFloorRingAlpha);
+        const float t = (float) (k + 1) / vortexRings;
+        const float phase = -time * 0.5f / (0.35f + t) + t * 2.4f;
+        addLatitudeRing (b, lat, phase, style, ringFade, bands, dirs, camera, out);
+    }
+}
+
+// A shelf's vortex: evenly spaced rings from the shelf frequency out to its
+// pole, lying on the raised or lowered surface and fading with its height.
+void SphereField::addShelfRings (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                                 float time, float amount, SpriteList& out)
+{
+    const float gain = b.displayGain();
+    if (std::abs (gainShape (gain)) * amount < 0.01f)
+        return;
+
+    const float towardPole = b.type == FilterType::lowShelf ? -1.0f : 1.0f;
+    const float spin = gain > 0 ? 0.5f : -0.5f;
+
+    for (int k = 0;; ++k)
+    {
+        const float lat = b.lat + towardPole * (float) k * cutFloorRingSpacing;
+
+        if (towardPole * lat > cutRingPoleLimit)
+            break;
+        if (towardPole * lat < -cutRingPoleLimit)
+            continue;
+
+        const float ringDb = shelfResponseDb (b, gain, latToFreq (lat));
+        const auto& style = ringStyle (ringDb);
+        const float ringFade = amount * std::min (1.0f, std::abs (gainShape (ringDb)) * 1.4f);
+        const float t = (float) (k + 1) / vortexRings;
+        const float phase = time * spin / (0.35f + t) + t * 2.4f;
+        addLatitudeRing (b, lat, phase, style, ringFade, bands, dirs, camera, out);
+    }
+}
+
+// A stereo peak's vortex: rings round the sphere on either side of its latitude.
+void SphereField::addBeltRings (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                                float time, float strength, SpriteList& out)
+{
+    const float gain = b.displayGain();
+    const float w = bandWidth (b);
+    const float spin = gain > 0 ? 0.5f : -0.5f;
+
+    for (int k = -beltRingsPerSide; k <= beltRingsPerSide; ++k)
+    {
+        const float offset = (float) k / (float) beltRingsPerSide;
+        const float angle = offset * w * 1.5f;
+        const float lat = b.lat + angle;
+        if (std::abs (lat) > cutRingPoleLimit)
+            continue;
+
+        const float t = std::abs (offset);
+        const float phase = time * spin / (0.35f + t) + offset * 2.4f;
+        const float ringFade = strength * (1.15f - t * 0.75f);
+        const auto& style = ringStyle (gain * std::exp (-2.0f * (1.0f - std::cos (angle)) / (w * w)));
+        addLatitudeRing (b, lat, phase, style, ringFade, bands, dirs, camera, out);
+    }
+}
+
+// A band's vortex: rings of particles lying on the bumped or dented surface
+// around it, swirling slowly. The motion makes the depth read.
+void SphereField::addVortex (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                             float time, float dt, SpriteList& out)
+{
+    const float goal = b.muted ? 0.0f : 1.0f;
+    auto& slot = vortexAmount[(size_t) b.id];
+    const float previous = slot < 0 ? goal : slot;
+    const float amount = previous + (goal - previous) * (1.0f - std::exp (-dt / 0.12f));
+    slot = amount;
+
+    if (b.isCut())
+    {
+        addCutRings (b, bands, dirs, camera, time, amount, out);
+        return;
+    }
+
+    if (b.isShelf())
+    {
+        addShelfRings (b, bands, dirs, camera, time, amount, out);
+        return;
+    }
+
+    const float gain = b.displayGain();
+    const float strength = std::abs (gainShape (gain)) * amount;
+    if (strength < 0.01f)
+        return;
+
+    if (b.stereo)
+    {
+        addBeltRings (b, bands, dirs, camera, time, strength, out);
+        return;
+    }
+
+    const auto c = bandDirection (b);
+    const Vec3 ref = std::abs (c.y) < 0.9f ? Vec3 { 0, 1, 0 } : Vec3 { 1, 0, 0 };
+    Vec3 e1 { ref.y * c.z - ref.z * c.y, ref.z * c.x - ref.x * c.z, ref.x * c.y - ref.y * c.x };
+    const float len = std::sqrt (e1.x * e1.x + e1.y * e1.y + e1.z * e1.z);
+    e1 = { e1.x / len, e1.y / len, e1.z / len };
+    const Vec3 e2 { c.y * e1.z - c.z * e1.y, c.z * e1.x - c.x * e1.z, c.x * e1.y - c.y * e1.x };
+
+    const float w = bandWidth (b);
+    const float spin = gain > 0 ? 0.5f : -0.5f; // boosts and cuts turn opposite ways
+
+    for (int k = 0; k < vortexRings; ++k)
+    {
+        const float t = (float) (k + 1) / vortexRings;
+        const float alpha = t * w * 1.5f; // angular radius of this ring
+        const float sa = std::sin (alpha), ca = std::cos (alpha);
+        const float phase = time * spin / (0.35f + t) + t * 2.4f; // inner rings turn faster; the offset makes a spiral
+        const float ringFade = strength * (1.15f - t * 0.75f);
+        const auto& style = ringStyle (gain * std::exp (-2.0f * (1.0f - ca) / (w * w))); // the bump's own dB at this ring
+
+        for (int j = 0; j < vortexPoints; ++j)
+        {
+            const float beta = ((float) j / vortexPoints) * twoPi + phase;
+            const float cb = std::cos (beta) * sa, sb = std::sin (beta) * sa;
+            addRingDot ({ c.x * ca + e1.x * cb + e2.x * sb,
+                          c.y * ca + e1.y * cb + e2.y * sb,
+                          c.z * ca + e1.z * cb + e2.z * sb }, bands, dirs, camera, style, ringFade, out);
+        }
+    }
+}
+
+void SphereField::update (const BandSet& bands, const Camera& camera, const StereoSpectrum::Result& spectrum,
+                          double timeSeconds, float dt, SpriteList& out)
+{
+    // The ring phases only need the time within a long cycle; keeping it small
+    // keeps float precision for a session that runs for days.
+    const float time = (float) std::fmod (timeSeconds, 3600.0);
+
+    updateSpectrum (spectrum, dt);
+    const bool reactive = audioMix > 0.001f;
+    if (reactive)
+        updateLevelTable();
+
+    const int steps = (int) std::ceil (dt / springStep);
+    const float stepDt = dt / (float) steps;
+    const float kSpring = springOmega * springOmega;
+    const float cSpring = 2.0f * springDamping * springOmega;
+    const float kAudio = audioOmega * audioOmega;
+    const float cAudio = 2.0f * audioOmega;
+
+    // Whole-sphere breath: kicked by bass onsets.
+    for (int s = 0; s < steps; ++s)
+    {
+        breathVelocity += (kSpring * 0.6f * (bassOnset * 0.09f - breath) - cSpring * 0.6f * breathVelocity) * stepDt;
+        breath += breathVelocity * stepDt;
+    }
+
+    // Bands, prepared once per frame. Muted bands drop out.
+    std::array<float, maxBands> bX, bY, bZ, bAmp, bInvW2, cFc, cTwoN, cCos, cSin;
+    std::array<float, maxBands> sFc, sA, sK, sCos, sSin, cBias, sBias;
+    std::array<float, maxBands> rSin, rCos, rAmp, rInvW2;
+    std::array<bool, maxBands> cLow, sLow;
+    int nb = 0, nc = 0, ns = 0, nr = 0;
+
+    for (const auto& b : bands)
+    {
+        if (b.muted)
+            continue;
+
+        if (b.isCut())
+        {
+            const auto i = (size_t) nc++;
+            cLow[i] = b.type == FilterType::lowCut;
+            cFc[i] = latToFreq (b.lat);
+            cTwoN[i] = 2.0f * (float) b.slope / 6.0f;
+            cCos[i] = b.stereo ? 0.0f : std::cos (b.lon);
+            cSin[i] = b.stereo ? 0.0f : std::sin (b.lon);
+            cBias[i] = b.stereo ? 2.0f : 1.0f; // makes the overlap below 1 everywhere
+            continue;
+        }
+
+        if (b.isShelf())
+        {
+            const auto i = (size_t) ns++;
+            sLow[i] = b.type == FilterType::lowShelf;
+            sFc[i] = latToFreq (b.lat);
+            sA[i] = shelfA (b.displayGain());
+            sK[i] = shelfK (sA[i], b.q);
+            sCos[i] = b.stereo ? 0.0f : std::cos (b.lon);
+            sSin[i] = b.stereo ? 0.0f : std::sin (b.lon);
+            sBias[i] = b.stereo ? 2.0f : 1.0f;
+            continue;
+        }
+
+        if (b.stereo)
+        {
+            const auto i = (size_t) nr++;
+            const float w = bandWidth (b);
+            rSin[i] = std::sin (b.lat);
+            rCos[i] = std::cos (b.lat);
+            rAmp[i] = gainDisplacement (b.displayGain());
+            rInvW2[i] = 1.0f / (w * w);
+            continue;
+        }
+
+        const auto i = (size_t) nb++;
+        const auto d = bandDirection (b);
+        const float w = bandWidth (b);
+        bX[i] = d.x;
+        bY[i] = d.y;
+        bZ[i] = d.z;
+        bAmp[i] = gainDisplacement (b.displayGain());
+        bInvW2[i] = 1.0f / (w * w);
+    }
+
+    const float cx = camera.centreX(), cy = camera.centreY(), rPx = camera.radiusPx();
+    const float cosYaw = camera.cosYaw, sinYaw = camera.sinYaw, cosPitch = camera.cosPitch, sinPitch = camera.sinPitch;
+    const float breathScale = 1.0f + breath;
+    const float sizeBase = particleSize * rPx * 0.05f;
+    const float audioDim = 1.0f - 0.3f * audioMix;
+    const float audioBright = 0.45f * audioMix;
+
+    // Averages over everything heard so far until the memory is full, so a
+    // usable map appears within a second instead of slowly filling up.
+    const bool energyActive = audioMix > 0.5f;
+    if (energyMapAmount < 0.01f && ! energyActive)
+        energyAge = 0;
+    if (energyActive)
+        energyAge = std::min (energyMemory, energyAge + dt);
+
+    const float energyRate = energyActive ? 1.0f - std::exp (-dt / std::max (0.1f, energyAge)) : 0.0f;
+    energyMapAmount += energyActive ? (1.0f - energyMapAmount) * (1.0f - std::exp (-dt / 0.8f))
+                                    : -energyMapAmount * (1.0f - std::exp (-dt / energyFade));
+    const float energyFloor = energyPeak - energyRange;
+    float nextEnergyPeak = 0, heatSum = 0;
+    const float audioFloor = audioPeakRef - audioWindow;
+    float framePeak = 0, shapedSum = 0;
+
+    for (int i = 0; i < numParticles; ++i)
+    {
+        const auto n = (size_t) i;
+        const float dx = pX[n], dy = pY[n], dz = pZ[n];
+
+        // EQ displacement: Gaussian bumps by squared chord distance.
+        float disp = 0;
+
+        for (size_t k = 0; k < (size_t) nb; ++k)
+        {
+            const float e = 2.0f * (1.0f - (dx * bX[k] + dy * bY[k] + dz * bZ[k])) * bInvW2[k];
+            if (e < 12.0f)
+                disp += bAmp[k] * std::exp (-e);
+        }
+
+        // Stereo peaks: the same bump, measured in latitude only.
+        if (nr > 0)
+        {
+            const float cosLat = std::sqrt (std::max (0.0f, 1.0f - dy * dy));
+
+            for (size_t k = 0; k < (size_t) nr; ++k)
+            {
+                const float e = 2.0f * (1.0f - (cosLat * rCos[k] + dy * rSin[k])) * rInvW2[k];
+                if (e < 12.0f)
+                    disp += rAmp[k] * std::exp (-e);
+            }
+        }
+
+        // Cuts: Butterworth response at this frequency, weighted by stereo overlap.
+        for (size_t k = 0; k < (size_t) nc; ++k)
+        {
+            const float ratio = cLow[k] ? cFc[k] / pFreq[n] : pFreq[n] / cFc[k];
+            const float pw = std::pow (ratio, cTwoN[k]);
+            if (pw < 1.0e-4f)
+                continue;
+
+            const float db = -10.0f * std::log10 (1.0f + pw);
+            const float t = std::min (1.0f, -db / maxGainDb);
+            const float overlap = (cBias[k] + pCosLon[n] * cCos[k] + pSinLon[n] * cSin[k]) / 2.0f;
+            disp -= std::pow (t, 0.7f) * maxCutDisplacement * overlap;
+        }
+
+        // Shelves: their response at this frequency, weighted by stereo overlap.
+        for (size_t k = 0; k < (size_t) ns; ++k)
+        {
+            const float ratio = pFreq[n] / sFc[k];
+            const float overlap = (sBias[k] + pCosLon[n] * sCos[k] + pSinLon[n] * sSin[k]) / 2.0f;
+            disp += gainDisplacement (shelfDbAt (sLow[k], sA[k], sK[k], ratio * ratio)) * overlap;
+        }
+
+        if (disp > maxBoostDisplacement || disp < -maxCutDisplacement)
+            disp = limitDisplacement (disp);
+
+        const float heardLevel = reactive ? audioLevelAt (i) : 0.0f;
+        framePeak = std::max (framePeak, heardLevel);
+
+        float heard = energy[n];
+        if (energyActive)
+            energy[n] = heard += (heardLevel - heard) * energyRate;
+        nextEnergyPeak = std::max (nextEnergyPeak, heard);
+
+        const float heat = std::clamp ((heard - energyFloor) / energyRange, 0.0f, 1.0f);
+        heatSum += heat;
+        const float heatDelta = energyMapAmount * (heat - energyMeanHeat);
+
+        // Each spot moves by its level relative to the loudest part of the mix,
+        // less most of the average so the sphere changes shape rather than just
+        // inflating, plus a push whenever it jumps above its own recent average.
+        const float relative = std::clamp ((heardLevel - audioFloor) / audioWindow, 0.0f, 1.0f);
+        const float shaped = relative * std::sqrt (relative);
+        shapedSum += shaped;
+        const float surge = std::clamp (heardLevel - heard, 0.0f, audioSurgeMax);
+        const float audioTarget = reactive ? audioMix * ((shaped - audioCentring * audioMeanLift) * audioHeight + surge * audioSurge) : 0.0f;
+
+        float lift = audioOffset[n], liftVelocity = audioVelocity[n];
+
+        if (lift != audioTarget || liftVelocity != 0)
+        {
+            for (int s = 0; s < steps; ++s)
+            {
+                liftVelocity += (kAudio * (audioTarget - lift) - cAudio * liftVelocity) * stepDt;
+                lift += liftVelocity * stepDt;
+            }
+
+            if (std::abs (lift) < 1.0e-5f && audioTarget == 0 && std::abs (liftVelocity) < 1.0e-4f)
+                lift = liftVelocity = 0;
+
+            audioOffset[n] = lift;
+            audioVelocity[n] = liftVelocity;
+        }
+
+        const float level = lift > 0 ? std::min (1.0f, std::sqrt (lift / audioHeight)) : 0.0f;
+
+        float offset = springOffset[n], velocity = springVelocity[n];
+
+        if (offset != disp || velocity != 0)
+        {
+            for (int s = 0; s < steps; ++s)
+            {
+                velocity += (kSpring * (disp - offset) - cSpring * velocity) * stepDt;
+                offset += velocity * stepDt;
+            }
+
+            // Settle exactly once the motion is invisible.
+            if (std::abs (offset - disp) < 1.0e-5f && std::abs (velocity) < 1.0e-4f)
+            {
+                offset = disp;
+                velocity = 0;
+            }
+
+            springOffset[n] = offset;
+            springVelocity[n] = velocity;
+        }
+
+        float surface = pShell[n] + offset + lift;
+        if (surface > surfaceKnee)
+            surface = surfaceKnee + surfaceRoom * (1.0f - std::exp ((surfaceKnee - surface) / surfaceRoom));
+
+        // The floor stops a spring overshoot flipping a point through the centre.
+        const float r = std::max (0.05f, surface) * breathScale;
+        const float mx = dx * r, my = dy * r, mz = dz * r;
+        const float x1 = mx * cosYaw + mz * sinYaw;
+        const float z1 = -mx * sinYaw + mz * cosYaw;
+        const float vy = my * cosPitch - z1 * sinPitch;
+        const float z = my * sinPitch + z1 * cosPitch;
+        const float persp = cameraDistance / (cameraDistance - z);
+        const float sx = cx + x1 * rPx * persp;
+        const float sy = cy - vy * rPx * persp;
+
+        // The far side fades and shrinks so the front reads clearly through it.
+        const float front = std::clamp ((z + 0.7f) / 1.4f, 0.0f, 1.0f);
+        const float depth = front * front * (3.0f - 2.0f * front);
+        const float facing = 0.1f + 0.9f * depth;
+        const float twinkle = 0.88f + 0.12f * std::sin (pTwinkle[n] + time * pTwinkleRate[n]);
+        const float amount = std::clamp (disp / 0.2f, -1.0f, 1.0f); // cuts darken, boosts brighten
+        const float audioGain = audioDim + audioBright * level;
+        const float size = sizeBase * pSize[n] * persp * (1.0f + 0.15f * level) * (0.75f + 0.25f * depth) * (1.0f + 0.8f * heatDelta);
+
+        out.add (particleStyles[(size_t) pBucket[n]], sx, sy, size,
+                 particleAlpha * facing * twinkle * audioGain * (amount < 0 ? 1.0f + amount * 0.8f : 1.0f + amount * 0.3f) * (1.0f + 1.3f * heatDelta));
+
+        if (pMid[n] > 0)
+            out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);
+    }
+
+    energyPeak = nextEnergyPeak;
+    audioPeakRef = framePeak > audioPeakRef ? framePeak : audioPeakRef + (framePeak - audioPeakRef) * (1.0f - std::exp (-dt / 4.0f));
+    audioMeanLift = shapedSum / (float) numParticles;
+    energyMeanHeat = heatSum / (float) numParticles;
+
+    const auto dirs = directionsOf (bands);
+    for (const auto& b : bands)
+        addVortex (b, bands, dirs, camera, time, dt, out);
+}
+
+} // namespace sphere

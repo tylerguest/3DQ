@@ -1,0 +1,180 @@
+/*
+  ==============================================================================
+
+    SphereView: the sphere as a native JUCE component. It owns the OpenGL
+    context, the band nodes and labels, and every mouse gesture:
+
+      drag empty space        rotate
+      scroll empty space      zoom
+      hold wheel and drag     pan the view
+      double-click sphere     add a band there
+      drag a node             move it (height = frequency, around = stereo position)
+      scroll on a node        gain
+      Ctrl/Cmd+drag a node    gain
+      Shift+scroll on node    width (Q); on a cut, its slope
+      Alt+scroll on node      dynamic range
+      Ctrl/Cmd+scroll on node threshold
+      double-click a node     remove it
+      Shift+double-click      cycle peak -> low cut -> high cut -> low shelf -> high shelf
+      right-click a node      mute
+      Shift+right-click node  stereo / mono (both channels, or its one stereo position)
+
+    Hovering the ? button in the bottom-right corner lists these. The ^ button
+    at the bottom centre slides up a panel of controls for the selected band.
+
+    Threads: mouse events arrive on the message thread and rendering runs on
+    OpenGL's own thread, so a busy host UI can't slow the sphere. `state` is
+    shared between them and always accessed under `stateLock`, held only long
+    enough to read or change it.
+
+  ==============================================================================
+*/
+
+#pragma once
+
+#include <JuceHeader.h>
+#include "SphereField.h"
+#include "SpriteRenderer.h"
+#include "BandPanel.h"
+
+class SphereView  : public juce::Component,
+                    private juce::OpenGLRenderer
+{
+public:
+    // What the view shows from the audio side; filled in on the render thread.
+    struct LiveAudio
+    {
+        StereoSpectrum::Result spectrum;
+        std::array<float, sphere::maxBands> gainDb {}, levelDb {};
+    };
+
+    SphereView();
+    ~SphereView() override;
+
+    // Set these before the view is shown.
+    std::function<void (const sphere::BandSet&)> onBandsEdited; // message thread
+    std::function<void (LiveAudio&)> readLiveAudio;             // render thread
+
+    // Bands pushed from outside (host automation, preset load). Ignored during a drag.
+    void setBands (const sphere::BandSet& bands);
+
+    void resized() override;
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+
+private:
+    struct RotateSample
+    {
+        double time;
+        float dx, dy;
+    };
+
+    struct Press
+    {
+        juce::Point<float> position;
+        int band = -1;
+        float offsetX = 0, offsetY = 0, radius = 1;
+    };
+
+    struct GainDrag
+    {
+        int band = -1;
+        float startY = 0, startGain = 0;
+    };
+
+    struct KnobDrag
+    {
+        int knob = 0;
+        float lastY = 0, position = 0;
+    };
+
+    struct SharedState
+    {
+        sphere::BandSet bands;
+        float yaw = 0, pitch = -0.35f, zoom = 0.905f, yawVelocity = 0, pitchVelocity = 0;
+        float panX = 0, panY = 0; // component pixels
+        bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
+        sphere::PanelTarget panelHover;
+        int selected = -1; // the band last clicked: highlighted, and what the panel controls
+        float panelAmount = 0; // eased 0..1, as the panel slides
+        sphere::PanelViewFit panelFit;
+        int hovered = -1, dragged = -1;
+        std::array<float, sphere::maxBands> liveLevelDb {};
+        double lastInteraction = 0;
+    };
+
+    void newOpenGLContextCreated() override;
+    void renderOpenGL() override;
+    void openGLContextClosing() override;
+
+    // Callers hold stateLock for all of these.
+    sphere::Camera cameraLocked() const;
+    sphere::Camera makeCameraLocked (float width, float height, float scale) const;
+    void updatePanelFitLocked();
+    sphere::Vec3 bandScreenPos (const sphere::Band&, const sphere::BandDirections&, const sphere::Camera&) const;
+    float handleRadius (const sphere::Band&, const sphere::BandDirections&) const;
+    int hitBand (juce::Point<float> devicePosition, const sphere::Camera&) const;
+    void updateCursorLocked();
+    void clampPanLocked();
+    void validateSelectionLocked();
+    void selectNeighbourLocked (int direction);
+    sphere::PanelTarget panelTargetLocked (juce::Point<float> position) const;
+    bool overHelpButton (juce::Point<float> position) const;
+
+    void pointerMoved (const juce::MouseEvent&);
+
+    // Each returns true when the panel took the event.
+    bool panelMouseDown (const juce::MouseEvent&);
+    bool panelPointerMoved (const juce::MouseEvent&);
+    bool panelDoubleClick (const juce::MouseEvent&);
+    bool panelWheel (const juce::MouseEvent&, float delta);
+
+    void notifyBandsEdited (const sphere::BandSet&);
+    juce::Point<float> toDevice (juce::Point<float> position) const;
+
+    void drawOverlay (juce::Graphics&, const sphere::BandSet&, const sphere::Camera&, int hovered, int dragged, int selected, float dt);
+    void drawNode (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, float emphasis, bool selected);
+    void drawLabel (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, const sphere::Camera&, float liveLevelDb);
+    void drawTitle (juce::Graphics&);
+    void drawHelp (juce::Graphics&, const sphere::Camera&, bool hovered, float dt);
+
+    juce::OpenGLContext context;
+    sphere::SphereField field;
+    sphere::SpriteRenderer renderer;
+    sphere::SpriteList sprites;
+    LiveAudio live;
+
+    // Render thread only.
+    double lastFrameTime = 0;
+    float autoBlend = 0;
+    float helpAmount = 0;
+    std::array<float, sphere::maxBands> nodeEmphasis {};
+    float dpr = 1;
+    double statsStart = 0, statsCpu = 0;
+    int statsFrames = 0;
+    const bool logStats;
+
+    std::atomic<float> componentWidth { 1 }, componentHeight { 1 }, publishedScale { 1 };
+
+    std::mutex stateLock;
+    SharedState state;
+
+    // Message thread only (mouse gesture state; read under stateLock when it affects drawing).
+    std::optional<Press> pressed;
+    std::optional<GainDrag> gainDrag;
+    std::optional<juce::Point<float>> panPosition; // last pointer position while panning
+    std::optional<KnobDrag> knobDrag;
+    juce::Point<float> lastPosition;
+    std::vector<RotateSample> rotateSamples;
+    int wheelBand = -1;
+    double lastWheelTime = 0;
+    float slopeAccumulator = 0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SphereView)
+};

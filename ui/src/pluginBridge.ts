@@ -8,6 +8,7 @@ import { Spectrum } from "./spectrum";
 interface JuceBackend {
   addEventListener(eventId: string, fn: (payload: unknown) => void): unknown;
   removeEventListener(handle: unknown): void;
+  emitEvent(eventId: string, payload: unknown): void;
 }
 
 const juceWindow = window as {
@@ -58,6 +59,7 @@ let latestDynamics: Map<number, BandDynamics> | null = null;
 
 let latestSpectrum: Spectrum | null = null;
 let latestSpectrumTime = 0;
+let ackScheduled = false;
 
 if (inPlugin) juceWindow.__JUCE__?.backend.addEventListener("spectrum", (payload) => {
   const w = payload as WireSpectrum;
@@ -68,6 +70,16 @@ if (inPlugin) juceWindow.__JUCE__?.backend.addEventListener("spectrum", (payload
     latestDynamics = dyn;
   }
   latestSpectrumTime = performance.now();
+
+  // Tell the plugin once this has been painted, so it sends the next one. This
+  // ties the update rate to what the page can actually draw.
+  if (!ackScheduled) {
+    ackScheduled = true;
+    requestAnimationFrame(() => {
+      ackScheduled = false;
+      juceWindow.__JUCE__?.backend.emitEvent("spectrumAck", {});
+    });
+  }
 });
 
 export function getPluginDynamics(): Map<number, BandDynamics> | null {

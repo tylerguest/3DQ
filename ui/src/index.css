@@ -4,7 +4,7 @@ html, body, #root {
   overflow: hidden;
   background: #111110;
   color: #e8e4da;
-  font-family: system-ui, sans-serif;
+  font-family: "Liberation Sans", system-ui, sans-serif;
   user-select: none;
 }
 
@@ -49,23 +49,8 @@ html, body, #root {
 
 .title {
   font-size: 22px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 2px;
-}
-
-.subtitle {
-  font-size: 13px;
-  opacity: 0.6;
-}
-
-.hint {
-  position: absolute;
-  bottom: 14px;
-  width: 100%;
-  text-align: center;
-  font-size: 12px;
-  opacity: 0.5;
-  pointer-events: none;
 }
 
 .preview-bar {

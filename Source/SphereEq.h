@@ -27,6 +27,14 @@
     so e.g. a low cut at Side removes lows from the side signal only. Gain,
     Q and dynamics don't apply to cuts.
 
+    Shelf bands are RBJ shelving filters on the same axis, with the band's
+    frequency at the half-gain point. They take gain, Q and dynamics like a
+    peak; their detector listens to the shelf's side of the spectrum.
+
+    A band normally acts on its one stereo axis. A stereo band ignores its
+    position and filters L and R alike, as a conventional EQ does; its detector
+    follows the louder channel, so both channels always get the same gain.
+
   ==============================================================================
 */
 
@@ -46,10 +54,15 @@ constexpr float maxFreq   = 20000.0f;
 constexpr float maxGainDb = 30.0f; // must match MAX_GAIN_DB in ui/src/bands.ts
 constexpr float minQ      = 0.3f;
 constexpr float maxQ      = 10.0f;
+constexpr float maxShelfQ = 2.0f; // higher resonates far past the shelf's own gain
 constexpr float minThresholdDb = -60.0f;
 constexpr float maxThresholdDb = 0.0f;
 
-enum class FilterType { peak = 0, lowCut = 1, highCut = 2 };
+// The values are the plugin's choice parameter, so new types go at the end.
+enum class FilterType { peak = 0, lowCut = 1, highCut = 2, lowShelf = 3, highShelf = 4 };
+
+constexpr bool isCutType (FilterType t)     { return t == FilterType::lowCut || t == FilterType::highCut; }
+constexpr bool isShelfType (FilterType t)   { return t == FilterType::lowShelf || t == FilterType::highShelf; }
 
 // Cut slopes in dB/oct (order = slope / 6). Index = the plugin's choice parameter.
 constexpr std::array<int, 6> cutSlopes { 6, 12, 18, 24, 36, 48 };
@@ -66,6 +79,7 @@ struct BandParams
     float thresholdDb = -30.0f; // dBFS, of the band's own (band-passed) signal
     FilterType type = FilterType::peak;
     int slopeDbPerOct = 24; // cuts only
+    bool  stereo = false; // filter L and R alike instead of one stereo axis
 };
 
 constexpr double pi = 3.14159265358979323846;
@@ -119,13 +133,14 @@ public:
         b.rangeDb       = std::clamp ((double) p.rangeDb, (double) -maxGainDb, (double) maxGainDb);
         b.thresholdDb   = std::clamp ((double) p.thresholdDb, (double) minThresholdDb, (double) maxThresholdDb);
 
-        const int order = p.type == FilterType::peak ? 0 : std::clamp (p.slopeDbPerOct / 6, 1, 2 * maxSections);
-        if (p.type != b.type || order != b.order)
+        const int order = ! isCutType (p.type) ? 0 : std::clamp (p.slopeDbPerOct / 6, 1, 2 * maxSections);
+        if (p.type != b.type || order != b.order || p.stereo != b.stereo)
         {
             // New filter structure: start it from silence (its old state is
             // meaningless), fading the band back in.
             b.type = p.type;
             b.order = order;
+            b.stereo = p.stereo;
             b.clearState();
             b.mix = 0.0;
         }
@@ -151,37 +166,52 @@ public:
 
                 const double uL = std::cos (b.phi);
                 const double uR = std::sin (b.phi);
-                const bool dynamic = b.type == FilterType::peak && b.rangeDb != 0.0;
+                const bool dynamic = ! isCutType (b.type) && b.rangeDb != 0.0;
                 const int numSections = b.numSections;
                 const double mixStart = b.mixPrevious, mixStep = (b.mix - b.mixPrevious) / n;
 
                 for (int i = start; i < start + n; ++i)
                 {
+                    // mix ramps the band in / out (cuts; peaks fade their gain instead).
+                    const double wetAmount = mixStart + mixStep * (i - start + 1);
+
+                    if (b.stereo)
+                    {
+                        const double inL = left[i], inR = right[i];
+
+                        if (dynamic)
+                        {
+                            const double scL = runSideChain (b, b.sz1, b.sz2, inL);
+                            const double scR = runSideChain (b, b.szr1, b.szr2, inR);
+                            followEnvelope (b, std::max (std::abs (scL), std::abs (scR)));
+                        }
+
+                        double yL = inL, yR = inR;
+                        for (int k = 0; k < numSections; ++k)
+                        {
+                            auto& f = b.sections[(size_t) k];
+                            yL = runSection (f, f.z1, f.z2, yL);
+                            yR = runSection (f, f.zr1, f.zr2, yR);
+                        }
+
+                        left[i]  = (float) (inL + (yL - inL) * wetAmount);
+                        right[i] = (float) (inR + (yR - inR) * wetAmount);
+                        continue;
+                    }
+
                     const double c = uL * left[i] + uR * right[i];
 
                     if (dynamic)
-                    {
-                        // Side-chain: band-pass of this band's component, peak envelope.
-                        const double sc = b.sb0 * c + b.sz1;
-                        b.sz1 = -b.a1s * sc + b.sz2;
-                        b.sz2 = b.sb2 * c - b.a2s * sc;
-                        const double level = std::abs (sc);
-                        b.envelope += (level - b.envelope) * (level > b.envelope ? attackCoeff : releaseCoeff);
-                    }
+                        followEnvelope (b, std::abs (runSideChain (b, b.sz1, b.sz2, c)));
 
-                    // Cascade of transposed direct form II sections.
                     double y = c;
                     for (int k = 0; k < numSections; ++k)
                     {
                         auto& f = b.sections[(size_t) k];
-                        const double out = f.b0 * y + f.z1;
-                        f.z1 = f.b1 * y - f.a1 * out + f.z2;
-                        f.z2 = f.b2 * y - f.a2 * out;
-                        y = out;
+                        y = runSection (f, f.z1, f.z2, y);
                     }
 
-                    // mix ramps the band in / out (cuts; peaks fade their gain instead).
-                    const double d = (y - c) * (mixStart + mixStep * (i - start + 1));
+                    const double d = (y - c) * wetAmount;
                     left[i]  = (float) (left[i]  + uL * d);
                     right[i] = (float) (right[i] + uR * d);
                 }
@@ -220,25 +250,49 @@ private:
         double logFreq = targetLogFreq, gainDb = 0.0, logQ = 0.0, phi = targetPhi;
         FilterType type = FilterType::peak;
         int order = 0; // cuts: Butterworth order (slope / 6)
+        bool stereo = false;
 
-        struct Section { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0; };
+        // z1 / z2 are the band's own state; zr1 / zr2 the right channel's in stereo mode.
+        struct Section { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0, zr1 = 0, zr2 = 0; };
         std::array<Section, maxSections> sections {};
         int numSections = 1;
         double mix = 0.0, mixPrevious = 0.0; // 0..1 wet amount (ramped per sample)
 
         void clearState()
         {
-            for (auto& f : sections) f.z1 = f.z2 = 0.0;
-            sz1 = sz2 = 0.0;
+            for (auto& f : sections) f.z1 = f.z2 = f.zr1 = f.zr2 = 0.0;
+            sz1 = sz2 = szr1 = szr2 = 0.0;
         }
 
         // Dynamics
         double rangeDb = 0.0, thresholdDb = -30.0;
         double envelope = 0.0;  // side-chain peak level (linear)
         double dynamicDb = 0.0; // current dynamic gain movement
-        double sb0 = 0.0, sb2 = 0.0, a1s = 0.0, a2s = 0.0; // side-chain band-pass (b1 = 0)
-        double sz1 = 0.0, sz2 = 0.0;
+        double sb0 = 0.0, sb1 = 0.0, sb2 = 0.0, a1s = 0.0, a2s = 0.0; // side-chain filter
+        double sz1 = 0.0, sz2 = 0.0, szr1 = 0.0, szr2 = 0.0;
     };
+
+    // One transposed direct form II section.
+    static double runSection (const Band::Section& f, double& z1, double& z2, double in)
+    {
+        const double out = f.b0 * in + z1;
+        z1 = f.b1 * in - f.a1 * out + z2;
+        z2 = f.b2 * in - f.a2 * out;
+        return out;
+    }
+
+    static double runSideChain (const Band& b, double& z1, double& z2, double in)
+    {
+        const double out = b.sb0 * in + z1;
+        z1 = b.sb1 * in - b.a1s * out + z2;
+        z2 = b.sb2 * in - b.a2s * out;
+        return out;
+    }
+
+    void followEnvelope (Band& b, double level) const
+    {
+        b.envelope += (level - b.envelope) * (level > b.envelope ? attackCoeff : releaseCoeff);
+    }
 
     // Moves a band's smoothed parameters one sub-block toward their targets and
     // refreshes its coefficients. Returns false if the band is silent (skip it).
@@ -250,14 +304,14 @@ private:
             b.logQ    = b.targetLogQ;
             b.phi     = b.targetPhi;
             b.gainDb  = 0.0; // fade in from flat to avoid a click
-            b.mix = b.mixPrevious = b.type == FilterType::peak ? 1.0 : 0.0; // cuts fade in by mix
+            b.mix = b.mixPrevious = isCutType (b.type) ? 0.0 : 1.0; // cuts fade in by mix
             b.snapToTarget = false;
         }
 
-        // Removed bands fade out (peaks: gain to 0 dB, cuts: mix to 0) before going idle.
-        const bool faded = b.type == FilterType::peak
-                             ? std::abs (b.gainDb) < 1.0e-3 && std::abs (b.dynamicDb) < 1.0e-3
-                             : b.mix < 1.0e-3;
+        // Removed bands fade out (peaks and shelves: gain to 0 dB, cuts: mix to 0) before going idle.
+        const bool faded = isCutType (b.type)
+                             ? b.mix < 1.0e-3
+                             : std::abs (b.gainDb) < 1.0e-3 && std::abs (b.dynamicDb) < 1.0e-3;
         if (! b.enabled && faded)
         {
             b.gainDb = 0.0;
@@ -281,7 +335,7 @@ private:
         }
 
         b.gainDb += (b.targetGainDb - b.gainDb) * smoothingCoeff;
-        const double mixTarget = b.type == FilterType::peak ? 1.0 : (b.enabled ? 1.0 : 0.0);
+        const double mixTarget = isCutType (b.type) && ! b.enabled ? 0.0 : 1.0;
         b.mix += (mixTarget - b.mix) * smoothingCoeff;
 
         // Dynamic movement from the detector (it has its own attack/release);
@@ -306,11 +360,25 @@ private:
         const double cosw0 = std::cos (w0);
         const double sinw0 = std::sin (w0);
 
-        // Side-chain band-pass (RBJ, 0 dB peak gain) at the band's frequency / Q.
+        // Side-chain: a band-pass (RBJ, 0 dB peak gain) at the band's frequency / Q;
+        // for a shelf, a Butterworth low- or high-pass covering what the shelf moves.
+        if (isShelfType (b.type))
+        {
+            const double alpha = sinw0 / std::sqrt (2.0);
+            const double s0 = 1.0 + alpha;
+            const double sign = b.type == FilterType::lowShelf ? 1.0 : -1.0;
+            b.sb0 = (1.0 - sign * cosw0) / 2.0 / s0;
+            b.sb1 = sign * (1.0 - sign * cosw0) / s0;
+            b.sb2 = b.sb0;
+            b.a1s = (-2.0 * cosw0) / s0;
+            b.a2s = (1.0 - alpha) / s0;
+        }
+        else
         {
             const double alpha = sinw0 / (2.0 * q);
             const double s0 = 1.0 + alpha;
             b.sb0 = alpha / s0;
+            b.sb1 = 0.0;
             b.sb2 = -alpha / s0;
             b.a1s = (-2.0 * cosw0) / s0;
             b.a2s = (1.0 - alpha) / s0;
@@ -329,6 +397,27 @@ private:
             f.b2 = (1.0 - alpha * A) / a0;
             f.a1 = (-2.0 * cosw0) / a0;
             f.a2 = (1.0 - alpha / A) / a0;
+            b.numSections = 1;
+            return;
+        }
+
+        if (isShelfType (b.type))
+        {
+            // RBJ cookbook shelves; the high shelf is the low shelf with cos(w0) negated
+            // and b1 / a1 flipped.
+            const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
+            const double A     = std::pow (10.0, totalDb / 40.0);
+            const double alpha = sinw0 / (2.0 * std::min (q, (double) maxShelfQ));
+            const double root  = 2.0 * std::sqrt (A) * alpha;
+            const double sign  = b.type == FilterType::lowShelf ? 1.0 : -1.0;
+            const double cs    = sign * cosw0;
+            const double a0    = (A + 1.0) + (A - 1.0) * cs + root;
+            auto& f = b.sections[0];
+            f.b0 = A * ((A + 1.0) - (A - 1.0) * cs + root) / a0;
+            f.b1 = sign * 2.0 * A * ((A - 1.0) - (A + 1.0) * cs) / a0;
+            f.b2 = A * ((A + 1.0) - (A - 1.0) * cs - root) / a0;
+            f.a1 = -sign * 2.0 * ((A - 1.0) + (A + 1.0) * cs) / a0;
+            f.a2 = ((A + 1.0) + (A - 1.0) * cs - root) / a0;
             b.numSections = 1;
             return;
         }
