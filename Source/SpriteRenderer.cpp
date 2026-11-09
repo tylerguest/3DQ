@@ -66,7 +66,10 @@ void main()
         float radiusPx = max (vSize * 0.5, 1.0);
         float coreR = min ((2.0 + 0.12 * radiusPx) / radiusPx, 1.0);
         float core = pow (max (1.0 - t * t / (coreR * coreR), 0.0), 2.0);
-        float density = 0.82 * core + 0.2 * pow (1.0 - t * t, 3.0);
+        // The wisp thins as the sprite grows, or big sprites overlap into a
+        // pale fog over the colours.
+        float wisp = 0.2 * min (3.0 / radiusPx, 1.0);
+        float density = 0.82 * core + wisp * pow (1.0 - t * t, 3.0);
         float shade = 0.72 + 0.35 * density + 0.3 * dot (vCoord, vec2 (-0.56, -0.83));
 
         // Covers most of what's behind it, so overlapping puffs stay their colour.
@@ -109,13 +112,17 @@ void main()
     float radius = uLight.z;
     vec3 c = vec3 (17.0, 17.0, 16.0) / 255.0;
 
-    c += vec3 (1.0, 0.98, 0.92) * 0.042 * gaussian (p - uLight.xy, vec2 (1.7 * radius));
+    // A big sphere shows more of the backdrop between its dots: less glow
+    // there keeps the colours from washing out.
+    float glow = clamp (220.0 / radius, 0.35, 1.0);
+
+    c += vec3 (1.0, 0.98, 0.92) * 0.042 * glow * gaussian (p - uLight.xy, vec2 (1.7 * radius));
 
     vec2 sigma = vec2 (1.5, 0.85) * radius;
     float x = p.x - uLight.x;
-    c += vec3 (0.35, 0.59, 0.82) * 0.075 * uHaze.x * gaussian (vec2 (x, p.y - uSphereY - 0.7 * radius), sigma);
-    c += vec3 (0.47, 0.76, 0.55) * 0.075 * uHaze.y * gaussian (vec2 (x, p.y - uSphereY), sigma);
-    c += vec3 (0.92, 0.87, 0.67) * 0.075 * uHaze.z * gaussian (vec2 (x, p.y - uSphereY + 0.7 * radius), sigma);
+    c += vec3 (0.35, 0.59, 0.82) * 0.075 * glow * uHaze.x * gaussian (vec2 (x, p.y - uSphereY - 0.7 * radius), sigma);
+    c += vec3 (0.47, 0.76, 0.55) * 0.075 * glow * uHaze.y * gaussian (vec2 (x, p.y - uSphereY), sigma);
+    c += vec3 (0.92, 0.87, 0.67) * 0.075 * glow * uHaze.z * gaussian (vec2 (x, p.y - uSphereY + 0.7 * radius), sigma);
 
     c *= 1.0 - 0.3 * smoothstep (0.75, 1.45, length ((p - 0.5 * uViewport) / (0.5 * uViewport)));
     c *= 1.0 - 0.65 * gaussian (p - vec2 (uLight.x, uShadow.x), vec2 (max (uShadow.y, 1.0), 0.13 * radius));

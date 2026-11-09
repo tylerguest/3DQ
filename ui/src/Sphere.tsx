@@ -36,6 +36,13 @@ const GL_SURFACE_POINTS = 16000;
 const GL_HAZE_POINTS = 2200;
 const CANVAS_SURFACE_POINTS = 5000;
 const CANVAS_HAZE_POINTS = 1200;
+// Extra surface points for a big sphere (WebGL only): the dots stay nearly the
+// same size in pixels, so without more of them a larger surface looks thinner and paler.
+const GL_EXTRA_POINTS = 48000;
+const EXTRA_START_RADIUS_PX = 200;
+const EXTRA_FADE_COUNT = 2000; // the newest extras fade in as the sphere grows
+const EXTRA_EDGE_FADE = 0.2;   // extras fade in over this much of the front half
+const SPRING_UNSET = 1e9;      // an extra that wasn't drawn last frame
 const NUM_FREQUENCY_COLOURS = 24;
 const TINT_STEPS = 7;
 const NUM_TINTS = 1 + 2 * TINT_STEPS; // none, then towards boost, then towards cut
@@ -76,11 +83,13 @@ type Vec3 = [number, number, number];
 // Orange and red only ever mean boost and cut. Stops are positions on the log
 // frequency axis (0 = 20 Hz, 1 = 20 kHz).
 const FREQUENCY_COLOURS: { t: number; rgb: RGB }[] = [
-  { t: 0, rgb: [104, 128, 232] },    // sub: blue
-  { t: 0.3, rgb: [74, 182, 182] },   // ~160 Hz, bass: teal
-  { t: 0.52, rgb: [140, 202, 118] }, // ~700 Hz, mids: green
-  { t: 0.75, rgb: [232, 208, 122] }, // ~3.5 kHz, presence: straw
-  { t: 1, rgb: [238, 232, 220] },    // air: bone
+  { t: 0, rgb: [150, 96, 255] },      // sub: violet
+  { t: 0.17, rgb: [62, 120, 255] },   // ~65 Hz, bass: blue
+  { t: 0.33, rgb: [40, 205, 235] },   // ~200 Hz, low mids: cyan
+  { t: 0.5, rgb: [70, 225, 120] },    // ~630 Hz, mids: green
+  { t: 0.67, rgb: [205, 235, 70] },   // ~2 kHz, upper mids: lime
+  { t: 0.83, rgb: [255, 225, 90] },   // ~6.3 kHz, presence: yellow
+  { t: 1, rgb: [238, 240, 255] },     // air: ice white
 ];
 const POLE_DIM = 0.82; // brightness at the poles relative to the equator
 const DOT_BOOST: RGB = [255, 120, 24];
@@ -112,7 +121,9 @@ function colourForFrequency(t: number): RGB {
   let i = 0;
   while (i < FREQUENCY_COLOURS.length - 2 && t > FREQUENCY_COLOURS[i + 1].t) ++i;
   const a = FREQUENCY_COLOURS[i], b = FREQUENCY_COLOURS[i + 1];
-  const [r, g, bl] = lerpRGB(a.rgb, b.rgb, clamp((t - a.t) / (b.t - a.t), 0, 1));
+  // Eased, so each range holds its own colour and changes over between ranges.
+  const along = clamp((t - a.t) / (b.t - a.t), 0, 1);
+  const [r, g, bl] = lerpRGB(a.rgb, b.rgb, along * along * (3 - 2 * along));
   const y = Math.sin((t * 2 - 1) * (Math.PI / 2));
   const k = 1 - (1 - POLE_DIM) * y * y;
   return [r * k, g * k, bl * k];
@@ -195,7 +206,7 @@ function randomDirection(): Vec3 {
 const frequencyColourOf = (y: number) =>
   Math.round((Math.asin(clamp(y, -1, 1)) / Math.PI + 0.5) * (NUM_FREQUENCY_COLOURS - 1));
 
-function buildPoints(numSurface: number, numHaze: number): Point[] {
+function buildPoints(numSurface: number, numHaze: number, numExtra: number): Point[] {
   const points: Point[] = [];
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
   // Particle sizes scale with spacing, so the sphere looks equally full at any count.
@@ -223,6 +234,19 @@ function buildPoints(numSurface: number, numHaze: number): Point[] {
     const shell = 0.85 + Math.random() * 0.3;
     points.push({ dir, shell, size: (0.3 + Math.random() * 0.6) * sizeScale, colour: frequencyColourOf(dir[1]),
                   twinkle: Math.random() * Math.PI * 2, twinkleRate: 0.4 + Math.random() * 0.8 });
+  }
+
+  // A low-discrepancy sequence: however many are in use, they're evenly spread.
+  for (let k = 0; k < numExtra; ++k) {
+    const y0 = 2 * ((0.5 + k * 0.7548776662) % 1) - 1;
+    const lat = clamp(Math.asin(y0) + jitter(), -Math.PI / 2, Math.PI / 2);
+    const y = Math.sin(lat);
+    const r = Math.cos(lat);
+    const theta = Math.PI * 2 * ((0.5 + k * 0.569840291) % 1) + jitter() / Math.max(r, 0.05);
+    points.push({ dir: [Math.cos(theta) * r, y, Math.sin(theta) * r],
+                  shell: 1 + (Math.random() - 0.5) * 0.02,
+                  size: (0.5 + Math.random() * 1.0) * sizeScale, colour: frequencyColourOf(y),
+                  twinkle: Math.random() * Math.PI * 2, twinkleRate: 0.6 + Math.random() * 1.4 });
   }
 
   return points;
@@ -295,8 +319,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // side can be timed even without a GPU.
     const bench = process.env.NODE_ENV !== "production" && new URLSearchParams(location.search).has("bench");
     const nullSink: SpriteSink = { begin() {}, add() {}, end() {} };
-    const points = glSink || bench ? buildPoints(GL_SURFACE_POINTS, GL_HAZE_POINTS)
-                          : buildPoints(CANVAS_SURFACE_POINTS, CANVAS_HAZE_POINTS);
+    const useGlCounts = !!glSink || bench;
+    const numSurface = useGlCounts ? GL_SURFACE_POINTS : CANVAS_SURFACE_POINTS;
+    const numBase = numSurface + (useGlCounts ? GL_HAZE_POINTS : CANVAS_HAZE_POINTS);
+    const points = buildPoints(numSurface, numBase - numSurface, useGlCounts ? GL_EXTRA_POINTS : 0);
 
     // Flat per-particle arrays for the hot render loop (no objects or
     // allocations per particle per frame).
@@ -315,7 +341,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       pTwinkleRate[i] = p.twinkleRate;
       // Mid (centre pan) meridian: lon 0 is the x = 0, z > 0 half of the sphere.
       const w = Math.exp(-(p.dir[0] * p.dir[0]) / (MID_LINE_WIDTH * MID_LINE_WIDTH));
-      pMid[i] = p.dir[2] > 0 && p.shell > 0.99 && p.shell < 1.01 && w > 0.05 ? w : 0;
+      pMid[i] = i < numBase && p.dir[2] > 0 && p.shell > 0.99 && p.shell < 1.01 && w > 0.05 ? w : 0;
     });
 
     // For cuts: each particle's frequency and longitude (as cos / sin).
@@ -406,6 +432,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // when bands are added, moved or removed.
     const springOffset = new Float32Array(points.length); // current radius offset
     const springVelocity = new Float32Array(points.length);
+    springOffset.fill(SPRING_UNSET, numBase);
     const SPRING_OMEGA = 2 * Math.PI * 4.5; // natural frequency (rad/s)
     const SPRING_DAMPING = 0.42; // damping ratio (< 1 = a little overshoot)
     const SPRING_STEP = 1 / 120; // max integration step (s), keeps the spring stable
@@ -1803,10 +1830,17 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       });
 
       // The far half first, so nearer balls cover it.
-      let backCount = 0, frontStart = N;
-      for (let i = 0; i < N; ++i) drawOrder[pY[i] * sp + (pZ[i] * cy - pX[i] * sy) * cp < 0 ? backCount++ : --frontStart] = i;
+      let backCount = 0, frontStart = numBase, drawCount = numBase;
+      for (let i = 0; i < numBase; ++i) drawOrder[pY[i] * sp + (pZ[i] * cy - pX[i] * sy) * cp < 0 ? backCount++ : --frontStart] = i;
 
-      for (let k = 0; k < N; ++k) {
+      // Only the front half gets extras: that's the surface you see, at half the cost.
+      const wantedExtras = numSurface * (Math.pow(rPx / EXTRA_START_RADIUS_PX, 1.6) - 1);
+      for (let i = numBase; i < N; ++i) {
+        if (i - numBase < wantedExtras && pY[i] * sp + (pZ[i] * cy - pX[i] * sy) * cp > 0) drawOrder[drawCount++] = i;
+        else springOffset[i] = SPRING_UNSET;
+      }
+
+      for (let k = 0; k < drawCount; ++k) {
         const i = drawOrder[k];
         const dx = pX[i], dy = pY[i], dz = pZ[i];
 
@@ -1861,6 +1895,9 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           tint = audioMix * incoming * incoming * (3 - 2 * incoming) * Math.pow(Math.min(1, db / TINT_FULL_DB), 0.6);
         }
 
+        // An extra comes in at the rim, already in place.
+        if (springOffset[i] === SPRING_UNSET) { springOffset[i] = disp; springVelocity[i] = 0; }
+
         let offset = springOffset[i];
         let velocity = springVelocity[i];
         if (offset !== disp || velocity !== 0) {
@@ -1899,9 +1936,12 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         const audioSize = 1 + audioMix * (QUIET_SIZE + (LOUD_SIZE - QUIET_SIZE) * loud - 1);
         const size = sizeBase * pSize[i] * persp * audioSize * (0.75 + 0.25 * depth);
         const step = Math.round(tint * TINT_STEPS);
+        const extraFade = i < numBase ? 1
+          : Math.min(1, (wantedExtras - (i - numBase)) / EXTRA_FADE_COUNT)
+            * Math.min(1, (dy * sp + (dz * cy - dx * sy) * cp) / EXTRA_EDGE_FADE);
         // A heavily cut dot has lost its audio but still needs to show its colour.
         sink.add(pColour[i] * NUM_TINTS + (step === 0 ? 0 : disp > 0 ? step : step + TINT_STEPS), sx, sy2, size,
-                 PARTICLE_ALPHA * facing * lit * twinkle * Math.max(audioGain, 0.35 + 0.6 * tint));
+                 extraFade * PARTICLE_ALPHA * facing * lit * twinkle * Math.max(audioGain, 0.35 + 0.6 * tint));
 
         // Light up the particles along the Mid (centre pan) meridian.
         const mid = pMid[i];

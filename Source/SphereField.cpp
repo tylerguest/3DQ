@@ -26,6 +26,14 @@ RGB mixRGB (RGB a, RGB b, float t)
 
 constexpr int surfacePoints = 16000;
 constexpr int hazePoints = 2200;
+// Extra surface points for a big sphere: the dots stay nearly the same size in
+// pixels, so without more of them a larger surface looks thinner and paler.
+constexpr int firstExtraPoint = surfacePoints + hazePoints;
+constexpr int extraPoints = 48000;
+constexpr float extraStartRadiusPx = 200.0f;
+constexpr float extraFadeCount = 2000.0f; // the newest extras fade in as the sphere grows
+constexpr float extraEdgeFade = 0.2f;     // extras fade in over this much of the front half
+constexpr float springUnset = 1.0e9f;     // an extra that wasn't drawn last frame
 constexpr int numFrequencyColours = 24;
 constexpr int tintSteps = 7;
 constexpr int numTints = 1 + 2 * tintSteps; // none, then towards boost, then towards cut
@@ -46,12 +54,14 @@ struct ColourStop
     RGB rgb;
 };
 
-constexpr std::array<ColourStop, 5> frequencyColours {{
-    { 0.0f,  { 104, 128, 232 } }, // sub: blue
-    { 0.3f,  {  74, 182, 182 } }, // bass: teal
-    { 0.52f, { 140, 202, 118 } }, // mids: green
-    { 0.75f, { 232, 208, 122 } }, // presence: straw
-    { 1.0f,  { 238, 232, 220 } }, // air: bone
+constexpr std::array<ColourStop, 7> frequencyColours {{
+    { 0.0f,  { 150,  96, 255 } }, // sub: violet
+    { 0.17f, {  62, 120, 255 } }, // bass: blue
+    { 0.33f, {  40, 205, 235 } }, // low mids: cyan
+    { 0.5f,  {  70, 225, 120 } }, // mids: green
+    { 0.67f, { 205, 235,  70 } }, // upper mids: lime
+    { 0.83f, { 255, 225,  90 } }, // presence: yellow
+    { 1.0f,  { 238, 240, 255 } }, // air: ice white
 }};
 
 constexpr RGB boostColour { 255, 120, 24 };
@@ -68,7 +78,9 @@ RGB colourForFrequency (float t)
 
     const auto& a = frequencyColours[i];
     const auto& b = frequencyColours[i + 1];
-    const auto c = mixRGB (a.rgb, b.rgb, std::clamp ((t - a.t) / (b.t - a.t), 0.0f, 1.0f));
+    // Eased, so each range holds its own colour and changes over between ranges.
+    const float along = std::clamp ((t - a.t) / (b.t - a.t), 0.0f, 1.0f);
+    const auto c = mixRGB (a.rgb, b.rgb, along * along * (3.0f - 2.0f * along));
     const float y = std::sin ((t * 2.0f - 1.0f) * halfPi);
     const float k = 1.0f - (1.0f - poleDim) * y * y;
     return { c.r * k, c.g * k, c.b * k };
@@ -146,7 +158,7 @@ SphereField::SphereField()
 
 void SphereField::buildParticles()
 {
-    numParticles = surfacePoints + hazePoints;
+    numParticles = firstExtraPoint + extraPoints;
     const auto n = (size_t) numParticles;
 
     for (auto* v : { &pX, &pY, &pZ, &pShell, &pSize, &pTwinkle, &pTwinkleRate, &pMid, &pFreq, &pCosLon, &pSinLon,
@@ -155,6 +167,7 @@ void SphereField::buildParticles()
 
     pColour.assign (n, 0);
     drawOrder.assign (n, 0);
+    std::fill (springOffset.begin() + firstExtraPoint, springOffset.end(), springUnset);
 
     const float goldenAngle = pi * (3.0f - std::sqrt (5.0f));
     const float sizeScale = std::sqrt (5000.0f / surfacePoints);
@@ -167,12 +180,26 @@ void SphereField::buildParticles()
         const auto s = (size_t) i;
         float x, y, z, shell;
 
-        if (i < surfacePoints)
+        if (i < surfacePoints || i >= firstExtraPoint)
         {
-            const float y0 = 1.0f - (((float) i + 0.5f) / surfacePoints) * 2.0f;
+            float y0, lon0;
+
+            if (i < surfacePoints)
+            {
+                y0 = 1.0f - (((float) i + 0.5f) / surfacePoints) * 2.0f;
+                lon0 = goldenAngle * (float) i;
+            }
+            else
+            {
+                // A low-discrepancy sequence: however many are in use, they're evenly spread.
+                const auto k = (double) (i - firstExtraPoint);
+                y0 = 2.0f * (float) std::fmod (0.5 + k * 0.7548776662, 1.0) - 1.0f;
+                lon0 = twoPi * (float) std::fmod (0.5 + k * 0.5698402910, 1.0);
+            }
+
             const float lat = std::clamp (std::asin (y0) + jitter(), -halfPi, halfPi);
             const float r = std::cos (lat);
-            const float theta = goldenAngle * (float) i + jitter() / std::max (r, 0.05f);
+            const float theta = lon0 + jitter() / std::max (r, 0.05f);
             x = std::cos (theta) * r;
             y = std::sin (lat);
             z = std::sin (theta) * r;
@@ -203,7 +230,7 @@ void SphereField::buildParticles()
 
         // Mid (centre pan) meridian: lon 0 is the x = 0, z > 0 half of the sphere.
         const float w = std::exp (-(x * x) / (midLineWidth * midLineWidth));
-        pMid[s] = z > 0 && shell > 0.99f && shell < 1.01f && w > 0.05f ? w : 0.0f;
+        pMid[s] = i < firstExtraPoint && z > 0 && shell > 0.99f && shell < 1.01f && w > 0.05f ? w : 0.0f;
 
         const float lat = std::asin (std::clamp (y, -1.0f, 1.0f));
         const float lon = std::atan2 (x, z);
@@ -599,17 +626,27 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     const float cosYaw = camera.cosYaw, sinYaw = camera.sinYaw, cosPitch = camera.cosPitch, sinPitch = camera.sinPitch;
     const float sizeBase = particleSize * rPx * 0.05f;
 
-    int backCount = 0, frontStart = numParticles;
+    auto towardsViewer = [&] (size_t s) { return pY[s] * sinPitch + (pZ[s] * cosYaw - pX[s] * sinYaw) * cosPitch; };
 
-    for (int i = 0; i < numParticles; ++i)
+    int backCount = 0, frontStart = firstExtraPoint, drawCount = firstExtraPoint;
+
+    for (int i = 0; i < firstExtraPoint; ++i)
+        drawOrder[(size_t) (towardsViewer ((size_t) i) < 0 ? backCount++ : --frontStart)] = i;
+
+    // Only the front half gets extras: that's the surface you see, at half the cost.
+    const float wantedExtras = surfacePoints * (std::pow (rPx / extraStartRadiusPx, 1.6f) - 1.0f);
+
+    for (int i = firstExtraPoint; i < numParticles; ++i)
     {
-        const auto s = (size_t) i;
-        const bool isFar = pY[s] * sinPitch + (pZ[s] * cosYaw - pX[s] * sinYaw) * cosPitch < 0;
-        drawOrder[(size_t) (isFar ? backCount++ : --frontStart)] = i;
+        if ((float) (i - firstExtraPoint) < wantedExtras && towardsViewer ((size_t) i) > 0)
+            drawOrder[(size_t) drawCount++] = i;
+        else
+            springOffset[(size_t) i] = springUnset;
     }
 
-    for (const int i : drawOrder)
+    for (int k = 0; k < drawCount; ++k)
     {
+        const int i = drawOrder[(size_t) k];
         const auto n = (size_t) i;
         const float dx = pX[n], dy = pY[n], dz = pZ[n];
 
@@ -676,6 +713,13 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
             tint = audioMix * incoming * incoming * (3.0f - 2.0f * incoming) * std::pow (std::min (1.0f, db / tintFullDb), 0.6f);
         }
 
+        // An extra comes in at the rim, already in place.
+        if (springOffset[n] == springUnset)
+        {
+            springOffset[n] = disp;
+            springVelocity[n] = 0;
+        }
+
         float offset = springOffset[n], velocity = springVelocity[n];
 
         if (offset != disp || velocity != 0)
@@ -722,9 +766,15 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         const int step = (int) std::lround (tint * tintSteps);
         const int style = pColour[n] * numTints + (step == 0 ? 0 : (disp > 0 ? step : step + tintSteps));
 
+        float extraFade = 1;
+
+        if (i >= firstExtraPoint)
+            extraFade = std::min (1.0f, (wantedExtras - (float) (i - firstExtraPoint)) / extraFadeCount)
+                      * std::min (1.0f, towardsViewer (n) / extraEdgeFade);
+
         // A heavily cut dot has lost its audio but still needs to show its colour.
         out.add (particleStyles[(size_t) style], sx, sy, size,
-                 particleAlpha * facing * lit * twinkle * std::max (audioGain, 0.35f + 0.6f * tint));
+                 extraFade * particleAlpha * facing * lit * twinkle * std::max (audioGain, 0.35f + 0.6f * tint));
 
         if (pMid[n] > 0)
             out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);

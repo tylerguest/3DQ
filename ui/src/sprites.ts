@@ -101,7 +101,10 @@ const fragmentShader = /* glsl */ `
       float radiusPx = max(vSize * 0.5, 1.0);
       float coreR = min((2.0 + 0.12 * radiusPx) / radiusPx, 1.0);
       float core = pow(max(1.0 - t * t / (coreR * coreR), 0.0), 2.0);
-      float density = 0.82 * core + 0.2 * pow(1.0 - t * t, 3.0);
+      // The wisp thins as the sprite grows, or big sprites overlap into a
+      // pale fog over the colours.
+      float wisp = 0.2 * min(3.0 / radiusPx, 1.0);
+      float density = 0.82 * core + wisp * pow(1.0 - t * t, 3.0);
       float shade = 0.72 + 0.35 * density + 0.3 * dot(coord, vec2(-0.56, -0.83));
 
       // Covers most of what's behind it, so overlapping puffs stay their colour.

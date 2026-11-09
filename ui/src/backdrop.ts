@@ -76,9 +76,12 @@ export class BackdropLayer {
     ctx.fillRect(0, 0, width, height);
 
     ctx.globalCompositeOperation = "lighter";
-    this.gaussian(b.centreX, b.lightY, 1.7 * b.radius, 1.7 * b.radius, [255, 250, 235], 0.042);
+    // A big sphere shows more of the backdrop between its dots: less glow
+    // there keeps the colours from washing out.
+    const glow = Math.min(1, Math.max(0.35, 220 / b.radius));
+    this.gaussian(b.centreX, b.lightY, 1.7 * b.radius, 1.7 * b.radius, [255, 250, 235], 0.042 * glow);
     b.haze.forEach((level, i) => {
-      if (level > 0.005) this.gaussian(b.centreX, b.sphereY + HAZE_HEIGHT[i] * b.radius, 1.5 * b.radius, 0.85 * b.radius, HAZE_COLOURS[i], HAZE_AMOUNT * level);
+      if (level > 0.005) this.gaussian(b.centreX, b.sphereY + HAZE_HEIGHT[i] * b.radius, 1.5 * b.radius, 0.85 * b.radius, HAZE_COLOURS[i], HAZE_AMOUNT * glow * level);
     });
 
     ctx.globalCompositeOperation = "source-over";
