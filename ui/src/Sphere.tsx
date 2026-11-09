@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
 import { NUM_SPECTRUM_BANDS, SPECTRUM_RANGE_DB, Spectrum, emptySpectrum, powerToLevel } from "./spectrum";
 import type { BandDynamics } from "./pluginBridge";
-import { BandPanelLayout, PanelTarget, PanelViewFit, drawBandPanel, fitViewAbovePanel, hitBandPanel, knobEnabled, knobIsStepped, knobPosition, makeBandPanelLayout, resetKnob, setBandType, setKnobPosition } from "./bandPanel";
+import { BandPanelLayout, PanelTarget, PanelViewFit, SurfaceExtent, drawBandPanel, fitViewAbovePanel, hitBandPanel, panelScale, knobEnabled, knobIsStepped, knobPosition, makeBandPanelLayout, resetKnob, setBandType, setKnobPosition } from "./bandPanel";
+import { BackdropLayer } from "./backdrop";
 import { CanvasSpriteSink, GlSpriteSink, SpriteProfile, SpriteSink, SpriteStyle } from "./sprites";
 import {
   Band, MAX_BANDS, MAX_FREQ, MIN_FREQ, axisOverlap, cutResponseDb, MAX_GAIN_DB, MAX_Q, MIN_Q, bandDirection, bandWidth, clamp, formatDb, formatFreq, formatGain,
   MAX_SHELF_Q, bandOverlap, isShelf, shelfA, shelfDbAt, shelfK, shelfResponseDb,
-  CUT_SLOPES, DEFAULT_CUT_SLOPE, DEFAULT_THRESHOLD_DB, FILTER_TYPES, MAX_BOOST_DISPLACEMENT, MAX_CUT_DISPLACEMENT, gainDisplacement, limitDisplacement, isCut, MAX_THRESHOLD_DB, MIN_THRESHOLD_DB, displayGain, gainShape, latToFreq, midSideLabel, panLabel, surfaceDisplacement,
+  CUT_SLOPES, DEFAULT_CUT_SLOPE, DEFAULT_THRESHOLD_DB, FILTER_TYPES, MAX_BOOST_DISPLACEMENT, MAX_CUT_DISPLACEMENT, gainDisplacement, limitDisplacement, isCut, MAX_THRESHOLD_DB, MIN_THRESHOLD_DB, displayGain, gainShape, latToFreq, midSideLabel, panLabel, surfaceDisplacement, surfaceRadius,
 } from "./bands";
 
 // Rotating particle sphere drawn with Canvas 2D (no WebGL needed, so it runs in
@@ -18,6 +19,7 @@ import {
 //   drag empty space       rotate
 //   scroll empty space     zoom
 //   hold wheel and drag    pan the view
+//   double-click background recentre the view
 //   double-click sphere    add a band there
 //   drag a node            move it (height = frequency, around = stereo position)
 //   scroll on a node       gain (bump out / dent in)
@@ -31,7 +33,10 @@ const GL_SURFACE_POINTS = 16000;
 const GL_HAZE_POINTS = 2200;
 const CANVAS_SURFACE_POINTS = 5000;
 const CANVAS_HAZE_POINTS = 1200;
-const NUM_COLOUR_BUCKETS = 32;
+const NUM_FREQUENCY_COLOURS = 24;
+const TINT_STEPS = 7;
+const NUM_TINTS = 1 + 2 * TINT_STEPS; // none, then towards boost, then towards cut
+const NUM_COLOUR_BUCKETS = NUM_FREQUENCY_COLOURS * NUM_TINTS;
 const SPRITE_SIZE = 64; // Canvas 2D fallback sprites; big enough not to blur when scaled up
 const CAMERA_DISTANCE = 3.2;
 const NODE_HIT_RADIUS = 16; // CSS px
@@ -47,9 +52,11 @@ const HELP_ROWS: [string, string][] = [
   ["Double-click sphere", "Add band"],
   ["Double-click band", "Remove band"],
   ["Drag band", "Move band"],
+  ["Alt+hold band", "Solo while held"],
   ["Drag empty space", "Rotate"],
   ["Scroll empty space", "Zoom"],
   ["Hold wheel and drag", "Pan view"],
+  ["Double-click background", "Recentre view"],
   ["Scroll band or Ctrl+drag", "Gain"],
   ["Shift+scroll band", "Width (cuts: slope)"],
   ["Alt+scroll band", "Dynamic range"],
@@ -62,9 +69,9 @@ const HELP_ROWS: [string, string][] = [
 type RGB = [number, number, number];
 type Vec3 = [number, number, number];
 
-// Theme: graphite, with muted particle colours running through the frequency
-// range. They stay clear of orange and red, which only ever mean boost and cut.
-// Stops are positions on the log frequency axis (0 = 20 Hz, 1 = 20 kHz).
+// A dot's colour is its frequency until the EQ is changing real signal there.
+// Orange and red only ever mean boost and cut. Stops are positions on the log
+// frequency axis (0 = 20 Hz, 1 = 20 kHz).
 const FREQUENCY_COLOURS: { t: number; rgb: RGB }[] = [
   { t: 0, rgb: [104, 128, 232] },    // sub: blue
   { t: 0.3, rgb: [74, 182, 182] },   // ~160 Hz, bass: teal
@@ -73,10 +80,13 @@ const FREQUENCY_COLOURS: { t: number; rgb: RGB }[] = [
   { t: 1, rgb: [238, 232, 220] },    // air: bone
 ];
 const POLE_DIM = 0.82; // brightness at the poles relative to the equator
-// Near-white particles add up fast with additive blending; keep each one
-// fainter and smaller so the sphere reads as fine grain, not white blobs.
-const PARTICLE_ALPHA = 0.5;
+const DOT_BOOST: RGB = [255, 120, 24];
+const DOT_CUT: RGB = [232, 52, 48];
+const PARTICLE_ALPHA = 0.65;
 const PARTICLE_SIZE = 0.78;
+// A soft light from the upper left, fixed to the view, so the sphere has form.
+const LIGHT_X = -0.36, LIGHT_Y = 0.62, LIGHT_Z = 0.7;
+const LIGHT_FLOOR = 0.74, LIGHT_AMOUNT = 0.46;
 const WARM_GREY: RGB = [138, 134, 124];
 const PANEL_FILL = "rgba(17,17,16,0.88)";
 const PANEL_STROKE = "rgba(138,134,124,0.45)";
@@ -86,7 +96,7 @@ interface Point {
   dir: Vec3;   // unit direction
   shell: number; // base radius (1 on the surface, ~0.85-1.15 for haze)
   size: number;
-  bucket: number;
+  colour: number; // index into the frequency colours
   twinkle: number; // phase of the gentle brightness shimmer
   twinkleRate: number; // radians per second
 }
@@ -105,7 +115,13 @@ function colourForFrequency(t: number): RGB {
   return [r * k, g * k, bl * k];
 }
 
-const bucketColour = (i: number) => colourForFrequency(i / (NUM_COLOUR_BUCKETS - 1));
+function bucketColour(i: number): RGB {
+  const base = colourForFrequency(Math.floor(i / NUM_TINTS) / (NUM_FREQUENCY_COLOURS - 1));
+  const tint = i % NUM_TINTS;
+  return tint === 0 ? base
+       : tint <= TINT_STEPS ? lerpRGB(base, DOT_BOOST, tint / TINT_STEPS)
+                            : lerpRGB(base, DOT_CUT, (tint - TINT_STEPS) / TINT_STEPS);
+}
 
 const rgbString = ([r, g, b]: RGB, a = 1) => `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${a})`;
 
@@ -119,14 +135,16 @@ function buildSprites(): HTMLCanvasElement[] {
     c.width = c.height = SPRITE_SIZE;
     const ctx = c.getContext("2d")!;
     const half = SPRITE_SIZE / 2;
-    const grad = ctx.createRadialGradient(half, half, 0, half, half, half);
-    // Crisp core inside a faint halo (matches the WebGL shader in sprites.ts).
-    const hot = lerpRGB(rgb, [255, 255, 255], 0.35);
-    grad.addColorStop(0, rgbString(hot));
-    grad.addColorStop(0.27, rgbString(rgb));
-    grad.addColorStop(0.32, rgbString(rgb, 0.12));
-    grad.addColorStop(0.6, rgbString(rgb, 0.04));
-    grad.addColorStop(1, rgbString(rgb, 0));
+    // A small crisp core in a faint wisp of gas, lit from the upper left (close
+    // to the WebGL shader in sprites.ts, with the core at its default-size width).
+    const grad = ctx.createRadialGradient(half - 0.1 * half, half - 0.14 * half, 0, half, half, half);
+    const lit = lerpRGB(rgb, [255, 255, 255], 0.08);
+    const coreR = 0.45;
+    for (let t = 0; t <= 1; t += 0.05) {
+      const core = Math.pow(Math.max(1 - (t * t) / (coreR * coreR), 0), 2);
+      grad.addColorStop(Math.min(t, 1), rgbString(lit, Math.min(1, 0.8 * (0.82 * core + 0.2 * Math.pow(1 - t * t, 3)))));
+    }
+    grad.addColorStop(1, rgbString(lit, 0));
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
     sprites.push(c);
@@ -170,9 +188,9 @@ function randomDirection(): Vec3 {
   return [r * Math.cos(theta), u, r * Math.sin(theta)];
 }
 
-// Colour bucket for a unit direction's y: latitude is the log frequency axis.
-const bucketOf = (y: number) =>
-  Math.round((Math.asin(clamp(y, -1, 1)) / Math.PI + 0.5) * (NUM_COLOUR_BUCKETS - 1));
+// Frequency colour for a unit direction's y: latitude is the log frequency axis.
+const frequencyColourOf = (y: number) =>
+  Math.round((Math.asin(clamp(y, -1, 1)) / Math.PI + 0.5) * (NUM_FREQUENCY_COLOURS - 1));
 
 function buildPoints(numSurface: number, numHaze: number): Point[] {
   const points: Point[] = [];
@@ -192,7 +210,7 @@ function buildPoints(numSurface: number, numHaze: number): Point[] {
     const theta = goldenAngle * i + jitter() / Math.max(r, 0.05);
     points.push({ dir: [Math.cos(theta) * r, y, Math.sin(theta) * r],
                   shell: 1 + (Math.random() - 0.5) * 0.02,
-                  size: (0.5 + Math.random() * 1.0) * sizeScale, bucket: bucketOf(y),
+                  size: (0.5 + Math.random() * 1.0) * sizeScale, colour: frequencyColourOf(y),
                   twinkle: Math.random() * Math.PI * 2, twinkleRate: 0.6 + Math.random() * 1.4 });
   }
 
@@ -200,7 +218,7 @@ function buildPoints(numSurface: number, numHaze: number): Point[] {
   for (let i = 0; i < numHaze; ++i) {
     const dir = randomDirection();
     const shell = 0.85 + Math.random() * 0.3;
-    points.push({ dir, shell, size: (0.3 + Math.random() * 0.6) * sizeScale, bucket: bucketOf(dir[1]),
+    points.push({ dir, shell, size: (0.3 + Math.random() * 0.6) * sizeScale, colour: frequencyColourOf(dir[1]),
                   twinkle: Math.random() * Math.PI * 2, twinkleRate: 0.4 + Math.random() * 0.8 });
   }
 
@@ -221,6 +239,7 @@ interface SphereProps {
 export default function Sphere({ onBandsChange, externalBands, getSpectrum, getDynamics }: SphereProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
+  const backdropCanvasRef = useRef<HTMLCanvasElement>(null);
   const onBandsChangeRef = useRef(onBandsChange);
   onBandsChangeRef.current = onBandsChange;
   const getSpectrumRef = useRef(getSpectrum);
@@ -266,6 +285,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       Math.round(Math.pow(Math.min(1, Math.abs(db) / MAX_GAIN_DB), 0.6) * (NUM_RING_COLOURS - 1));
 
     const glSink = GlSpriteSink.create(glCanvasRef.current!, styles);
+    const backdrop = new BackdropLayer(backdropCanvasRef.current!);
     const canvasSink = new CanvasSpriteSink(ctx, styles);
     let sink: SpriteSink = canvasSink;
     // Dev benchmark (?bench): WebGL particle count, nothing drawn, so the CPU
@@ -279,14 +299,15 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // allocations per particle per frame).
     const N = points.length;
     const pX = new Float32Array(N), pY = new Float32Array(N), pZ = new Float32Array(N);
-    const pShell = new Float32Array(N), pSize = new Float32Array(N), pBucket = new Uint8Array(N);
+    const drawOrder = new Int32Array(N);
+    const pShell = new Float32Array(N), pSize = new Float32Array(N), pColour = new Uint8Array(N);
     const pTwinkle = new Float32Array(N), pTwinkleRate = new Float32Array(N);
     const pMid = new Float32Array(N); // Mid-seam weight (0 = not on the seam)
     points.forEach((p, i) => {
       [pX[i], pY[i], pZ[i]] = p.dir;
       pShell[i] = p.shell;
       pSize[i] = p.size;
-      pBucket[i] = p.bucket;
+      pColour[i] = p.colour;
       pTwinkle[i] = p.twinkle;
       pTwinkleRate[i] = p.twinkleRate;
       // Mid (centre pan) meridian: lon 0 is the x = 0, z > 0 half of the sphere.
@@ -332,11 +353,9 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const SPECTRUM_ATTACK = 0.035;
     const SPECTRUM_RELEASE = 0.24;
     let audioMix = 0; // 0 = static sphere, 1 = fully audio-reactive
-
-    // Bass onsets (kicks) give the whole sphere a small "breath".
-    const BASS_BANDS = 12; // 20 Hz .. ~110 Hz
-    let bassAverage = 0;
-    let bassOnset = 0;
+    const HAZE_ATTACK = 0.25, HAZE_RELEASE = 0.9; // seconds
+    const hazeLevels = [0, 0, 0]; // the backdrop's glow: lows, mids, highs, 0..1
+    let shownExtent: SurfaceExtent | null = null; // eased, as the surface's springs ease
 
     const updateSpectrum = (dt: number) => {
       const spec = getSpectrumRef.current?.() ?? null;
@@ -368,51 +387,33 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const target = powerToLevel(peak) > 0.02 ? 1 : 0;
       audioMix += (target - audioMix) * (1 - Math.pow(0.94, dt * 60));
 
-      let bass = 0;
-      for (let b = 0; b < BASS_BANDS; ++b) bass += (held.ll[b] + held.rr[b]) / 2;
-      const bassLevel = powerToLevel(bass);
-      bassAverage += (bassLevel - bassAverage) * (1 - Math.exp(-dt / 0.35));
-      bassOnset = Math.max(0, bassLevel - bassAverage) * audioMix;
+      // The backdrop's glow: the loudest band in each third of the spectrum, on
+      // the same fixed scale as the dots, but slow enough to read as weather.
+      hazeLevels.forEach((held, zone) => {
+        let loudest = 0;
+        for (let b = Math.floor((zone * NUM_SPECTRUM_BANDS) / 3); b < Math.floor(((zone + 1) * NUM_SPECTRUM_BANDS) / 3); ++b)
+          loudest = Math.max(loudest, (smoothed.ll[b] + smoothed.rr[b]) / 2);
+        const level = clamp((powerToLevel(loudest) - 0.2) / 0.6, 0, 1);
+        hazeLevels[zone] = held + (level - held) * (1 - Math.exp(-dt / (level > held ? HAZE_ATTACK : HAZE_RELEASE)));
+      });
     };
 
-    // Each particle's radius rides a damped spring toward its target (EQ shape
-    // + audio). Slightly under-damped, so the surface gives a soft, jelly-like
-    // bounce on hits and when bands are added, moved or removed, instead of
-    // snapping or following the analysis frame by frame.
+    // Each particle's radius rides a damped spring toward the EQ's shape.
+    // Slightly under-damped, so the surface gives a soft, jelly-like bounce
+    // when bands are added, moved or removed.
     const springOffset = new Float32Array(points.length); // current radius offset
     const springVelocity = new Float32Array(points.length);
     const SPRING_OMEGA = 2 * Math.PI * 4.5; // natural frequency (rad/s)
     const SPRING_DAMPING = 0.42; // damping ratio (< 1 = a little overshoot)
     const SPRING_STEP = 1 / 120; // max integration step (s), keeps the spring stable
-    let breath = 0, breathVelocity = 0; // whole-sphere pulse on kicks
 
-    // The audio part of the motion has its own spring, critically damped (no
-    // overshoot): it glides with the music instead of wobbling on every
-    // analysis frame. The bouncier spring above is for EQ edits only.
-    const audioOffset = new Float32Array(points.length);
-    const audioVelocity = new Float32Array(points.length);
-    const AUDIO_OMEGA = 2 * Math.PI * 4.2;
-    const AUDIO_HEIGHT = 0.28; // radius added at the loudest spot in the mix
-    const AUDIO_WINDOW = 36 / SPECTRUM_RANGE_DB; // moves over the top 36 dB, in level units
-    const AUDIO_CENTRING = 0.7; // how much of the average lift is taken back out
-    const AUDIO_SURGE = 0.8; // extra radius per level unit above a spot's recent average
-    const AUDIO_SURGE_MAX = 0.2; // ...up to this many level units (12 dB)
-    const SURFACE_KNEE = 1.3; // past this radius the surface eases toward...
-    const SURFACE_ROOM = 0.3; // ...this much further, so peaks stay in the window without a crease
-    let audioPeakRef = 0; // loudest level lately: jumps up at once, falls over seconds
-    let audioMeanLift = 0; // average of the shaped levels in the previous frame
-
-    // Energy map: each particle's running average of the level at its own
-    // frequency and stereo position. Drawn as size and brightness relative to
-    // the hottest spot, so the sphere reads as a heat map of the recent mix.
-    const energy = new Float32Array(points.length);
-    const ENERGY_MEMORY = 6; // seconds averaged while audio plays
-    const ENERGY_FADE = 20; // seconds for the map to fade out after audio stops
-    const ENERGY_RANGE = 24 / SPECTRUM_RANGE_DB; // shows the top 24 dB, in level units
-    let energyAge = 0; // seconds of audio averaged so far (capped at ENERGY_MEMORY)
-    let energyMapAmount = 0; // 0 = no map drawn, 1 = fully drawn
-    let energyPeak = 0; // hottest particle in the previous frame
-    let energyMeanHeat = 0; // average heat in the previous frame: only differences from it show
+    // Audio, on a fixed scale in level units.
+    const LOUD_FLOOR = 0.2, LOUD_WIDTH = 0.6; // -68 dB to -32 dB per band
+    const QUIET_ALPHA = 0.4, LOUD_ALPHA = 1.5, QUIET_SIZE = 0.75, LOUD_SIZE = 1.75;
+    // How much of a dot's colour the EQ gets: full at this many dB of change,
+    // on signal at least this loud coming in.
+    const TINT_FULL_DB = 12;
+    const TINT_FLOOR = 0.25, TINT_WIDTH = 0.3;
 
     // Display level per (band, longitude): computed once per frame on a small
     // grid, then each particle interpolates it. Much cheaper than evaluating
@@ -475,14 +476,30 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       for (const b of incoming) bands.push({ ...b });
       hoveredBand = keep(hoveredBand);
       selectedBand = keep(selectedBand);
+      soloLatched = keep(soloLatched);
+      soloHeld = keep(soloHeld);
+      if (!restCentrePlaced) {
+        restCentre = restCentreOfShape();
+        restCentrePlaced = true;
+      }
       wheelBand = keep(wheelBand);
     };
     let hoveredBand: Band | null = null;
     let selectedBand: Band | null = null; // the band last clicked: highlighted, and what the panel controls
+    let soloLatched: Band | null = null, soloHeld: Band | null = null; // from the panel's S button, and Alt+hold on a node
+    // A held solo wins over the panel's, and a band that's gone stops being soloed.
+    const soloedBand = () => [soloHeld, soloLatched].find((b) => b && bands.indexOf(b) >= 0) ?? null;
     let panelOpen = false;
     let panelAmount = 0; // eased, so the panel slides up and down
     let panelFit: PanelViewFit = { zoomScale: 1, panDeltaY: 0 };
     let panelFitWidth = 0, panelFitHeight = 0;
+    const CLICK_MAX_MS = 350, CLICK_MAX_TRAVEL = 10; // CSS px
+    let recentring = false;
+    let recentreFit: PanelViewFit = { zoomScale: 1, panDeltaY: 0 }; // where a recentre ends up with the panel open
+    // Panel closed: how far below the window's centre the sphere's centre sits,
+    // in sphere radii, so the EQ'd shape is what looks centred.
+    let restCentre = 0, recentreRest = 0;
+    let restCentrePlaced = false;
     let panelHover: PanelTarget | null = null;
     let knobDrag: { knob: number; lastY: number; position: number } | null = null;
     let draggedBand: Band | null = null;
@@ -490,7 +507,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     let lastWheelTime = 0;
     let slopeAccumulator = 0; // wheel delta toward the next cut-slope step
     let liveDynamics: Map<number, BandDynamics> | null = null;
-    const notify = () => onBandsChangeRef.current?.(bands.map((b) => ({ ...b })));
+    const notify = () => {
+      const soloed = soloedBand();
+      onBandsChangeRef.current?.(bands.map((b) => ({ ...b, soloed: b === soloed })));
+    };
 
     // View state: yaw spins around the vertical axis, pitch tilts toward the viewer.
     const view = { yaw: 0, pitch: -0.35, zoom: 0.905, yawVelocity: 0, pitchVelocity: 0, panX: 0, panY: 0 }; // pan in CSS px
@@ -501,7 +521,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // A press only becomes a drag (band move or rotation) once the pointer has
     // moved a few pixels, so clicks and double-clicks don't nudge anything.
     const DRAG_THRESHOLD = 4; // CSS px
-    let pressed: { x: number; y: number; band: Band | null; offsetX: number; offsetY: number; radius: number } | null = null;
+    let pressed: { x: number; y: number; time: number; band: Band | null; offsetX: number; offsetY: number; radius: number } | null = null;
     // Recent rotation moves, to work out the fling speed on release.
     let rotateSamples: { t: number; dx: number; dy: number }[] = [];
     const ROTATE_SPEED = 0.008; // radians per CSS px
@@ -528,7 +548,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // ---- view maths ------------------------------------------------------
     const radiusPx = () => Math.min(canvas.width, canvas.height) * SPHERE_RADIUS_FRACTION * view.zoom * (1 + (panelFit.zoomScale - 1) * panelAmount);
     const centreX = () => canvas.width / 2 + view.panX * dpr;
-    const centreY = () => canvas.height / 2 + (view.panY + panelFit.panDeltaY * panelAmount) * dpr;
+    const centreY = () => canvas.height / 2 + (view.panY + panelFit.panDeltaY * panelAmount) * dpr + restCentre * radiusPx() * (1 - panelAmount);
     // Keeps the sphere's centre inside the window, so it can never be lost off-screen.
     const clampPan = () => {
       view.panX = clamp(view.panX, -canvas.clientWidth / 2, canvas.clientWidth / 2);
@@ -648,8 +668,9 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
     const overHelpButton = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      return Math.hypot(e.clientX - rect.left - (rect.width - HELP_BUTTON_INSET),
-                        e.clientY - rect.top - (rect.height - HELP_BUTTON_INSET)) <= HELP_BUTTON_RADIUS + 3;
+      const scale = panelScale(rect.width, rect.height);
+      return Math.hypot(e.clientX - rect.left - (rect.width - HELP_BUTTON_INSET * scale),
+                        e.clientY - rect.top - (rect.height - HELP_BUTTON_INSET * scale)) <= (HELP_BUTTON_RADIUS + 3) * scale;
     };
 
     // The panel follows a band that goes away (removed, or replaced by the host).
@@ -664,10 +685,35 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const current = selectedBand ? Math.max(0, order.indexOf(selectedBand)) : 0;
       selectedBand = order[(current + direction + order.length) % order.length];
     };
+    // The EQ can make the shape very lopsided, so the panel fits what's on screen.
+    const surfaceExtent = (ROWS = 36, COLUMNS = 72): SurfaceExtent => {
+      const dirs = bandDirs();
+      const extent = { top: 0, bottom: 0, halfWidth: 0 };
+      for (let row = 0; row < ROWS; ++row) {
+        const lat = -Math.PI / 2 + (Math.PI * row) / (ROWS - 1);
+        for (let column = 0; column < COLUMNS; ++column) {
+          const lon = (Math.PI * 2 * column) / COLUMNS;
+          const d: Vec3 = [Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon)];
+          const r = surfaceRadius(1 + surfaceDisplacement(bands, dirs, d));
+          const [x, y, z] = toView([d[0] * r, d[1] * r, d[2] * r]);
+          const perspective = CAMERA_DISTANCE / (CAMERA_DISTANCE - z);
+          const screenY = y * perspective;
+          extent.halfWidth = Math.max(extent.halfWidth, Math.abs(x * perspective));
+          extent.top = Math.max(extent.top, screenY);
+          extent.bottom = Math.min(extent.bottom, screenY);
+        }
+      }
+      return extent;
+    };
+
+    const restCentreOfShape = () => {
+      const extent = surfaceExtent();
+      return (extent.top + extent.bottom) / 2;
+    };
     const updatePanelFit = () => {
       panelFitWidth = canvas.clientWidth;
       panelFitHeight = canvas.clientHeight;
-      panelFit = fitViewAbovePanel(panelFitWidth, panelFitHeight, view.zoom, view.panY, SPHERE_RADIUS_FRACTION);
+      panelFit = fitViewAbovePanel(panelFitWidth, panelFitHeight, view.zoom, view.panY, SPHERE_RADIUS_FRACTION, surfaceExtent());
     };
     const panelLayout = (amount: number): BandPanelLayout => makeBandPanelLayout(canvas.clientWidth, canvas.clientHeight, amount);
     const panelTarget = (e: MouseEvent) => {
@@ -685,6 +731,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const onPointerDown = (e: PointerEvent) => {
       if (overHelpButton(e)) return;
       touch();
+      recentring = false;
       const target = panelTarget(e);
       if (target) {
         const band = selectedBand;
@@ -693,11 +740,13 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           case "toggle":
             panelOpen = !panelOpen;
             if (panelOpen) updatePanelFit();
+            else restCentre = restCentreOfShape(); // the panel's fit hides this until it slides away
             break;
           case "previous": selectNeighbour(-1); break;
           case "next": selectNeighbour(1); break;
           case "type": setBandType(band!, FILTER_TYPES[target.index]); notify(); break;
           case "stereo": band!.stereo = !band!.stereo; notify(); break;
+          case "solo": soloLatched = soloLatched === band ? null : band; notify(); break;
           case "mute": band!.muted = !band!.muted; notify(); break;
           case "remove":
             bands.splice(bands.indexOf(band!), 1);
@@ -745,8 +794,12 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         offsetX = sx - px;
         offsetY = sy - py;
         hoveredBand = band;
+        if (e.altKey) {
+          soloHeld = band;
+          notify();
+        }
       }
-      pressed = { x: e.clientX, y: e.clientY, band, offsetX, offsetY, radius };
+      pressed = { x: e.clientX, y: e.clientY, time: performance.now(), band, offsetX, offsetY, radius };
       lastX = e.clientX;
       lastY = e.clientY;
       rotateSamples = [];
@@ -818,7 +871,11 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     };
 
     const onPointerUp = (e: PointerEvent) => {
-      if (rotating) {
+      // A press this short counts as a click even if the hand drifted past DRAG_THRESHOLD.
+      const clickedEmpty = e.type === "pointerup" && !!pressed && !pressed.band
+        && (!rotating || (performance.now() - pressed.time < CLICK_MAX_MS
+                          && Math.hypot(e.clientX - pressed.x, e.clientY - pressed.y) < CLICK_MAX_TRAVEL));
+      if (rotating && !clickedEmpty) {
         // Fling with the speed of the last ~80 ms of movement; if the pointer
         // was held still before letting go, don't fling at all.
         const t = performance.now();
@@ -834,8 +891,12 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       }
       // A plain click on empty space clears the highlight. An open panel always
       // shows a band, so it keeps its selection.
-      if (e.type === "pointerup" && pressed && !pressed.band && !rotating && !panelOpen) selectedBand = null;
+      if (clickedEmpty && !panelOpen) selectedBand = null;
 
+      if (soloHeld) {
+        soloHeld = null;
+        notify();
+      }
       rotating = false;
       draggedBand = null;
       gainDrag = null;
@@ -887,7 +948,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         }
         return;
       }
-      if (e.ctrlKey || e.metaKey) return; // two quick gain drags shouldn't remove the band
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // two quick gain drags or solos shouldn't remove the band
       const [px, py] = eventPos(e);
       const hit = hitBand(px, py);
 
@@ -908,10 +969,17 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         return;
       }
 
+      const surface = pickSphere(px, py, false);
+      if (!surface) {
+        // The background: back to the centre, which with the panel open is the
+        // middle of the space above it.
+        recentring = true;
+        recentreFit = fitViewAbovePanel(canvas.clientWidth, canvas.clientHeight, view.zoom, 0, SPHERE_RADIUS_FRACTION, surfaceExtent());
+        recentreRest = restCentreOfShape();
+        return;
+      }
       const slot = freeSlot();
       if (slot < 0) return;
-      const surface = pickSphere(px, py, false);
-      if (!surface) return;
       const band: Band = { id: slot, ...toLatLon(surface), gainDb: 0, q: 1 };
       bands.push(band);
       // The new band's own bump lifts its node; re-pick on the lifted surface so
@@ -1250,9 +1318,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const drawHelp = (dt: number) => {
       helpAmount += ((helpHovered ? 1 : 0) - helpAmount) * (1 - Math.exp(-dt / 0.08));
 
-      const cx = canvas.width - HELP_BUTTON_INSET * dpr;
-      const cy = canvas.height - HELP_BUTTON_INSET * dpr;
-      const radius = HELP_BUTTON_RADIUS * dpr;
+      const unit = dpr * panelScale(canvas.width / dpr, canvas.height / dpr); // one scaled point, in device pixels
+      const cx = canvas.width - HELP_BUTTON_INSET * unit;
+      const cy = canvas.height - HELP_BUTTON_INSET * unit;
+      const radius = HELP_BUTTON_RADIUS * unit;
       const graphite: RGB = [17, 17, 16];
       const text: RGB = [232, 228, 218];
 
@@ -1262,10 +1331,10 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fillStyle = rgbString(graphite, 0.7);
       ctx.fill();
-      ctx.lineWidth = dpr;
+      ctx.lineWidth = unit;
       ctx.strokeStyle = rgbString(WARM_GREY, 0.45 + 0.4 * helpAmount);
       ctx.stroke();
-      ctx.font = `bold ${12 * dpr}px ${UI_FONT}`;
+      ctx.font = `bold ${12 * unit}px ${UI_FONT}`;
       ctx.fillStyle = rgbString(text, 0.55 + 0.45 * helpAmount);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -1274,20 +1343,20 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
       if (helpAmount < 0.01) return;
 
-      ctx.font = `${12 * dpr}px ${UI_FONT}`;
-      const padding = 10 * dpr, gap = 18 * dpr, lineHeight = Math.round(12 * dpr * 1.45);
+      ctx.font = `${12 * unit}px ${UI_FONT}`;
+      const padding = 10 * unit, gap = 18 * unit, lineHeight = Math.round(12 * unit * 1.45);
       const gestureWidth = Math.max(...HELP_ROWS.map(([gesture]) => ctx.measureText(gesture).width));
       const actionWidth = Math.max(...HELP_ROWS.map(([, action]) => ctx.measureText(action).width));
       const width = padding * 2 + gestureWidth + gap + actionWidth;
       const height = padding * 2 + lineHeight * HELP_ROWS.length;
-      const x = Math.max(8 * dpr, cx + radius - width);
-      const y = Math.max(8 * dpr, cy - radius - 8 * dpr - height);
+      const x = Math.max(8 * unit, cx + radius - width);
+      const y = Math.max(8 * unit, cy - radius - 8 * unit - height);
 
       ctx.fillStyle = rgbString(graphite, 0.92 * helpAmount);
       ctx.strokeStyle = rgbString(WARM_GREY, 0.45 * helpAmount);
-      ctx.lineWidth = dpr;
+      ctx.lineWidth = unit;
       ctx.beginPath();
-      ctx.roundRect(x, y, width, height, 6 * dpr);
+      ctx.roundRect(x, y, width, height, 6 * unit);
       ctx.fill();
       ctx.stroke();
 
@@ -1507,14 +1576,6 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const stepDt = dt / steps;
       const kSpring = SPRING_OMEGA * SPRING_OMEGA;
       const cSpring = 2 * SPRING_DAMPING * SPRING_OMEGA;
-      const kAudio = AUDIO_OMEGA * AUDIO_OMEGA;
-      const cAudio = 2 * AUDIO_OMEGA; // damping ratio 1
-
-      // Whole-sphere breath: a slightly bouncier spring kicked by bass onsets.
-      for (let s = 0; s < steps; ++s) {
-        breathVelocity += (kSpring * 0.6 * (bassOnset * 0.09 - breath) - cSpring * 0.6 * breathVelocity) * stepDt;
-        breath += breathVelocity * stepDt;
-      }
 
       const useGl = glSink !== null && glSink.available;
       sink = bench ? nullSink : useGl ? glSink : canvasSink;
@@ -1538,6 +1599,22 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const panelGoal = panelOpen ? 1 : 0;
       panelAmount += (panelGoal - panelAmount) * (1 - Math.exp(-dt / 0.08));
       if (Math.abs(panelGoal - panelAmount) < 0.002) panelAmount = panelGoal;
+      if (recentring) {
+        const keep = Math.exp(-dt / 0.09);
+        view.panX *= keep;
+        view.panY *= keep;
+        panelFit = {
+          zoomScale: recentreFit.zoomScale + (panelFit.zoomScale - recentreFit.zoomScale) * keep,
+          panDeltaY: recentreFit.panDeltaY + (panelFit.panDeltaY - recentreFit.panDeltaY) * keep,
+        };
+        restCentre = recentreRest + (restCentre - recentreRest) * keep;
+        if (Math.hypot(view.panX, view.panY) < 0.5 && Math.abs(panelFit.panDeltaY - recentreFit.panDeltaY) < 0.5 && Math.abs(restCentre - recentreRest) < 0.002) {
+          view.panX = view.panY = 0;
+          panelFit = recentreFit;
+          restCentre = recentreRest;
+          recentring = false;
+        }
+      }
       if (panelOpen && (canvas.clientWidth !== panelFitWidth || canvas.clientHeight !== panelFitHeight)) updatePanelFit();
 
       // Bands, prepared once per frame. Muted bands drop out.
@@ -1585,26 +1662,27 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       // View / projection constants (see toView and toScreen).
       syncTrig();
       const cx = centreX(), cyPx = centreY(), rPx = radiusPx();
-      const breathScale = 1 + breath;
       const sizeBase = PARTICLE_SIZE * baseSize;
-      const audioDim = 1 - 0.3 * audioMix; // = 1 + (0.7 - 1) * audioMix
-      const audioBright = 0.45 * audioMix;
 
-      // Averages over everything heard so far until the memory is full, so a
-      // usable map appears within a second instead of slowly filling up.
-      const energyActive = audioMix > 0.5;
-      if (energyMapAmount < 0.01 && !energyActive) energyAge = 0;
-      if (energyActive) energyAge = Math.min(ENERGY_MEMORY, energyAge + dt);
-      const energyRate = energyActive ? 1 - Math.exp(-dt / Math.max(0.1, energyAge)) : 0;
-      energyMapAmount += energyActive
-        ? (1 - energyMapAmount) * (1 - Math.exp(-dt / 0.8))
-        : -energyMapAmount * (1 - Math.exp(-dt / ENERGY_FADE));
-      const energyFloor = energyPeak - ENERGY_RANGE;
-      let nextEnergyPeak = 0, heatSum = 0;
-      const audioFloor = audioPeakRef - AUDIO_WINDOW;
-      let framePeak = 0, shapedSum = 0;
+      const extent = surfaceExtent(18, 36); // every frame, so a coarse grid
+      if (!shownExtent) shownExtent = extent;
+      const extentEase = 1 - Math.exp(-dt / 0.12);
+      shownExtent.top += (extent.top - shownExtent.top) * extentEase;
+      shownExtent.bottom += (extent.bottom - shownExtent.bottom) * extentEase;
+      shownExtent.halfWidth += (extent.halfWidth - shownExtent.halfWidth) * extentEase;
+      backdrop.draw(w, h, {
+        centreX: cx, lightY: cyPx - ((shownExtent.top + shownExtent.bottom) / 2) * rPx,
+        sphereY: cyPx, radius: rPx,
+        shadowY: cyPx + (0.17 - shownExtent.bottom) * rPx, shadowHalfWidth: 0.9 * shownExtent.halfWidth * rPx,
+        haze: hazeLevels,
+      });
 
-      for (let i = 0; i < N; ++i) {
+      // The far half first, so nearer balls cover it.
+      let backCount = 0, frontStart = N;
+      for (let i = 0; i < N; ++i) drawOrder[pY[i] * sp + (pZ[i] * cy - pX[i] * sy) * cp < 0 ? backCount++ : --frontStart] = i;
+
+      for (let k = 0; k < N; ++k) {
+        const i = drawOrder[k];
         const dx = pX[i], dy = pY[i], dz = pZ[i];
 
         // EQ displacement: Gaussian bumps by squared chord distance; bands
@@ -1643,42 +1721,20 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         }
         if (disp > MAX_BOOST_DISPLACEMENT || disp < -MAX_CUT_DISPLACEMENT) disp = limitDisplacement(disp);
 
-        // Audio: loud spots move outward with the music (the main effect),
-        // with only a gentle change in brightness and size.
         const heardLevel = reactive ? audioLevelAt(i) : 0;
-        if (heardLevel > framePeak) framePeak = heardLevel;
-        let heard = energy[i];
-        if (energyActive) energy[i] = heard += (heardLevel - heard) * energyRate;
-        if (heard > nextEnergyPeak) nextEnergyPeak = heard;
-        let heat = (heard - energyFloor) / ENERGY_RANGE;
-        heat = heat < 0 ? 0 : heat > 1 ? 1 : heat;
-        heatSum += heat;
-        const heatDelta = energyMapAmount * (heat - energyMeanHeat);
-        // Each spot moves by its level relative to the loudest part of the mix,
-        // less most of the average so the sphere changes shape rather than just
-        // inflating, plus a push whenever it jumps above its own recent average.
-        let relative = (heardLevel - audioFloor) / AUDIO_WINDOW;
-        relative = relative < 0 ? 0 : relative > 1 ? 1 : relative;
-        const shaped = relative * Math.sqrt(relative);
-        shapedSum += shaped;
-        let surge = heardLevel - heard;
-        surge = surge < 0 ? 0 : surge > AUDIO_SURGE_MAX ? AUDIO_SURGE_MAX : surge;
-        const audioTarget = reactive
-          ? audioMix * ((shaped - AUDIO_CENTRING * audioMeanLift) * AUDIO_HEIGHT + surge * AUDIO_SURGE)
-          : 0;
-        let lift = audioOffset[i];
-        let liftVelocity = audioVelocity[i];
-        if (lift !== audioTarget || liftVelocity !== 0) {
-          for (let s = 0; s < steps; ++s) {
-            liftVelocity += (kAudio * (audioTarget - lift) - cAudio * liftVelocity) * stepDt;
-            lift += liftVelocity * stepDt;
-          }
-          if (Math.abs(lift) < 1e-5 && audioTarget === 0 && Math.abs(liftVelocity) < 1e-4) { lift = 0; liftVelocity = 0; }
-          audioOffset[i] = lift;
-          audioVelocity[i] = liftVelocity;
+        let loud = (heardLevel - LOUD_FLOOR) / LOUD_WIDTH;
+        loud = loud < 0 ? 0 : loud > 1 ? 1 : loud;
+
+        // Boost or cut here in dB: the inverse of the shape curve. The analysis
+        // hears the EQ's output, so its change is taken back out to find what
+        // came in; a deep cut on a loud sound still counts.
+        let tint = 0;
+        if (reactive && disp !== 0) {
+          const db = MAX_GAIN_DB * Math.pow(Math.min(1, Math.abs(disp) / (disp > 0 ? MAX_BOOST_DISPLACEMENT : MAX_CUT_DISPLACEMENT)), 1 / 0.7);
+          let incoming = (heardLevel + (disp > 0 ? -db : db) / SPECTRUM_RANGE_DB - TINT_FLOOR) / TINT_WIDTH;
+          incoming = incoming < 0 ? 0 : incoming > 1 ? 1 : incoming;
+          tint = audioMix * incoming * incoming * (3 - 2 * incoming) * Math.pow(Math.min(1, db / TINT_FULL_DB), 0.6);
         }
-        // Brightness / size follow the same smoothed motion.
-        const level = lift > 0 ? Math.min(1, Math.sqrt(lift / AUDIO_HEIGHT)) : 0;
 
         let offset = springOffset[i];
         let velocity = springVelocity[i];
@@ -1695,9 +1751,8 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
         // Rotate into view space and project (inlined toView + toScreen).
         // (The floor stops a spring overshoot flipping a point through the centre.)
-        let surface = pShell[i] + offset + lift;
-        if (surface > SURFACE_KNEE) surface = SURFACE_KNEE + SURFACE_ROOM * (1 - Math.exp((SURFACE_KNEE - surface) / SURFACE_ROOM));
-        const r = Math.max(0.05, surface) * breathScale;
+        const surface = surfaceRadius(pShell[i] + offset);
+        const r = Math.max(0.05, surface);
         const mx = dx * r, my = dy * r, mz = dz * r;
         const x1 = mx * cy + mz * sy;
         const z1 = -mx * sy + mz * cy;
@@ -1713,26 +1768,20 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         front = front < 0 ? 0 : front > 1 ? 1 : front;
         const depth = front * front * (3 - 2 * front);
         const facing = 0.1 + 0.9 * depth;
+        const lit = LIGHT_FLOOR + LIGHT_AMOUNT * Math.max(0, (x1 * LIGHT_X + vy * LIGHT_Y + z * LIGHT_Z) / r);
         const twinkle = 0.88 + 0.12 * Math.sin(pTwinkle[i] + time * pTwinkleRate[i]);
-        // Cuts sink into a darker hole; boosts lift a little brighter.
-        let amount = disp / 0.2;
-        amount = amount < -1 ? -1 : amount > 1 ? 1 : amount;
-        const audioGain = audioDim + audioBright * level;
-        const size = sizeBase * pSize[i] * persp * (1 + 0.15 * level) * (0.75 + 0.25 * depth)
-                     * (1 + 0.8 * heatDelta);
-        sink.add(pBucket[i], sx, sy2, size,
-                 PARTICLE_ALPHA * facing * twinkle * audioGain * (amount < 0 ? 1 + amount * 0.8 : 1 + amount * 0.3)
-                 * (1 + 1.3 * heatDelta));
+        const audioGain = 1 + audioMix * (QUIET_ALPHA + (LOUD_ALPHA - QUIET_ALPHA) * loud - 1);
+        const audioSize = 1 + audioMix * (QUIET_SIZE + (LOUD_SIZE - QUIET_SIZE) * loud - 1);
+        const size = sizeBase * pSize[i] * persp * audioSize * (0.75 + 0.25 * depth);
+        const step = Math.round(tint * TINT_STEPS);
+        // A heavily cut dot has lost its audio but still needs to show its colour.
+        sink.add(pColour[i] * NUM_TINTS + (step === 0 ? 0 : disp > 0 ? step : step + TINT_STEPS), sx, sy2, size,
+                 PARTICLE_ALPHA * facing * lit * twinkle * Math.max(audioGain, 0.35 + 0.6 * tint));
 
         // Light up the particles along the Mid (centre pan) meridian.
         const mid = pMid[i];
         if (mid > 0) sink.add(STYLE_MID, sx, sy2, size * 1.1, facing * mid * 0.5);
       }
-
-      energyPeak = nextEnergyPeak;
-      audioPeakRef = framePeak > audioPeakRef ? framePeak : audioPeakRef + (framePeak - audioPeakRef) * (1 - Math.exp(-dt / 4));
-      audioMeanLift = shapedSum / N;
-      energyMeanHeat = heatSum / N;
 
       loopTotal += performance.now() - tLoop0;
       for (const b of bands) drawVortex(b, dirs, time, dt);
@@ -1748,7 +1797,17 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
       // A closed panel leaves this alone, so only a clicked band gets highlighted.
       if (panelOpen) validateSelection();
-      drawBandPanel(ctx, panelLayout(panelAmount), dpr, panelAmount, selectedBand, panelHover, knobDrag ? knobDrag.knob : -1);
+      const soloed = soloedBand();
+      drawBandPanel(ctx, panelLayout(panelAmount), dpr, panelAmount, selectedBand, !!soloed && soloed === selectedBand, panelHover, knobDrag ? knobDrag.knob : -1);
+      // Solo changes what you hear, so it stays on show with the panel closed.
+      if (soloed) {
+        ctx.save();
+        ctx.font = `${12 * dpr}px ${UI_FONT}`;
+        ctx.fillStyle = "rgba(232,228,218,0.85)";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText(`Solo  ·  Band ${soloed.id + 1}`, 72 * dpr, 30 * dpr);
+        ctx.restore();
+      }
       drawHelp(dt);
 
       ctx.globalCompositeOperation = "source-over";
@@ -1775,6 +1834,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
 
   return (
     <div className="sphere">
+      <canvas className="backdrop-layer" ref={backdropCanvasRef} />
       <canvas className="gl-layer" ref={glCanvasRef} />
       <canvas ref={canvasRef} />
     </div>

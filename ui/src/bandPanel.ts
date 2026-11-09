@@ -1,5 +1,5 @@
 // The band control panel that slides up from the ^ button: filter type, stereo
-// / mono, mute, remove, and a knob for each of the band's settings.
+// / mono, solo, mute, remove, and a knob for each of the band's settings.
 //
 // Layout, hit-testing, value mapping and drawing; Sphere.tsx owns the gestures.
 // Same maths as Source/BandPanel.cpp. The panel is laid out at its default-window
@@ -13,13 +13,13 @@ import {
 
 export const NUM_PANEL_KNOBS = 6; // frequency, gain, Q or slope, position, range, threshold
 
-export type PanelKind = "toggle" | "background" | "previous" | "next" | "type" | "stereo" | "mute" | "remove" | "knob";
+export type PanelKind = "toggle" | "background" | "previous" | "next" | "type" | "stereo" | "solo" | "mute" | "remove" | "knob";
 export interface PanelTarget { kind: PanelKind; index: number }
 
 interface Rect { x: number; y: number; w: number; h: number }
 
 export interface BandPanelLayout {
-  panel: Rect; previous: Rect; title: Rect; next: Rect; stereo: Rect; mute: Rect; remove: Rect;
+  panel: Rect; previous: Rect; title: Rect; next: Rect; stereo: Rect; solo: Rect; mute: Rect; remove: Rect;
   types: Rect[]; knobs: Rect[];
   toggle: [number, number];
   scale: number;
@@ -31,7 +31,7 @@ const PANEL_BOTTOM_INSET = 10;
 const TOGGLE_RADIUS = 10;
 const TOGGLE_CLOSED_INSET = 24; // from the window's bottom edge to the button's centre
 const PANEL_VIEW_GAP = 6; // between the sphere's room and the ^ button on the panel's edge
-const SPHERE_EXTENT = 1.2; // room allowed per unit of radius: perspective, plus some bump
+const PANEL_FIT_MARGIN = 10; // kept clear above and below the sphere when it is fitted
 const KNOB_RADIUS = 14;
 const KNOB_START_ANGLE = -2.35619; // 12 o'clock is 0, clockwise
 const KNOB_SWEEP = 4.71239;
@@ -50,9 +50,10 @@ const slopeIndex = (b: Band) => {
   return i < 0 ? 3 : i;
 };
 
-// Grows with the window's smaller side, but more slowly than the window, so it
-// doesn't dominate a large one.
-const panelScale = (width: number, height: number) => Math.max(1, Math.sqrt(Math.min(width, height) / PANEL_REFERENCE_SIZE));
+// How much the panel and the on-screen buttons grow with the window. It follows
+// the window's smaller side, but more slowly than the window, so they don't
+// dominate a large one.
+export const panelScale = (width: number, height: number) => Math.max(1, Math.sqrt(Math.min(width, height) / PANEL_REFERENCE_SIZE));
 
 export function makeBandPanelLayout(windowWidth: number, windowHeight: number, openAmount: number): BandPanelLayout {
   const scale = panelScale(windowWidth, windowHeight);
@@ -73,8 +74,9 @@ export function makeBandPanelLayout(windowWidth: number, windowHeight: number, o
     next: { x: x + 72, y: headerY, w: 18, h: headerH },
     types: FILTER_TYPES.map((_, i) => ({ x: x + 100 + 24 * i, y: headerY, w: 24, h: headerH })),
     remove: { x: right - 22, y: headerY, w: 22, h: headerH },
-    mute: { x: right - 48, y: headerY, w: 22, h: headerH },
-    stereo: { x: right - 114, y: headerY, w: 60, h: headerH },
+    mute: { x: right - 46, y: headerY, w: 22, h: headerH },
+    solo: { x: right - 70, y: headerY, w: 22, h: headerH },
+    stereo: { x: right - 114, y: headerY, w: 44, h: headerH },
     knobs: Array.from({ length: NUM_PANEL_KNOBS }, (_, i) => ({ x: x + knobWidth * i, y: top + 38, w: knobWidth, h: PANEL_HEIGHT - 46 })),
     toggle: [width / 2, closedToggle + (openTop - closedToggle) * openAmount],
     scale,
@@ -87,7 +89,7 @@ export function hitBandPanel(l: BandPanelLayout, cssX: number, cssY: number, ope
   if (Math.hypot(x - l.toggle[0], y - l.toggle[1]) <= TOGGLE_RADIUS + 3) return { kind: "toggle", index: 0 };
   if (!open || !contains(l.panel, x, y)) return null;
   if (hasBand) {
-    for (const kind of ["previous", "next", "stereo", "mute", "remove"] as const)
+    for (const kind of ["previous", "next", "stereo", "solo", "mute", "remove"] as const)
       if (contains(l[kind], x, y)) return { kind, index: 0 };
     const type = l.types.findIndex((r) => contains(r, x, y));
     if (type >= 0) return { kind: "type", index: type };
@@ -101,13 +103,20 @@ export function hitBandPanel(l: BandPanelLayout, cssX: number, cssY: number, ope
 // worked out once, when the panel opens: zooming or panning after that is
 // applied on top, and closing the panel puts the view back.
 export interface PanelViewFit { zoomScale: number; panDeltaY: number }
+// How far above and below the centre of view the EQ'd surface reaches on
+// screen, in sphere radii (up is positive).
+export interface SurfaceExtent { top: number; bottom: number; halfWidth: number }
 
-export function fitViewAbovePanel(width: number, height: number, zoom: number, panY: number, radiusFraction: number): PanelViewFit {
+export function fitViewAbovePanel(width: number, height: number, zoom: number, panY: number, radiusFraction: number,
+                                  extent: SurfaceExtent): PanelViewFit {
   const room = height - panelScale(width, height) * (PANEL_HEIGHT + PANEL_BOTTOM_INSET + TOGGLE_RADIUS + PANEL_VIEW_GAP);
   const radius = Math.min(width, height) * radiusFraction * zoom;
-  const fittedRadius = Math.min(radius, room / 2 / SPHERE_EXTENT);
-  const extent = fittedRadius * SPHERE_EXTENT;
-  const centre = Math.min(Math.max(room / 2 + panY, extent), room - extent);
+  const fittedRadius = Math.min(radius, (room - 2 * PANEL_FIT_MARGIN) / (extent.top - extent.bottom));
+  // Where the sphere's centre sits when the shape touches the top of the space,
+  // and the bottom; halfway between centres the shape we actually see.
+  const highest = PANEL_FIT_MARGIN + extent.top * fittedRadius;
+  const lowest = room - PANEL_FIT_MARGIN + extent.bottom * fittedRadius;
+  const centre = Math.min(Math.max((highest + lowest) / 2 + panY, highest), lowest);
   return { zoomScale: fittedRadius / radius, panDeltaY: centre - (height / 2 + panY) };
 }
 
@@ -218,7 +227,7 @@ function traceTypeGlyph(ctx: CanvasRenderingContext2D, type: number, cx: number,
 }
 
 export function drawBandPanel(ctx: CanvasRenderingContext2D, l: BandPanelLayout, dpr: number, amount: number,
-                              band: Band | null, hover: PanelTarget | null, activeKnob: number) {
+                              band: Band | null, soloed: boolean, hover: PanelTarget | null, activeKnob: number) {
   ctx.save();
   ctx.scale(dpr * l.scale, dpr * l.scale);
   ctx.globalCompositeOperation = "source-over";
@@ -281,6 +290,9 @@ export function drawBandPanel(ctx: CanvasRenderingContext2D, l: BandPanelLayout,
 
       buttonBack(l.stereo, !!band.stereo, hoverOn("stereo"));
       text(band.stereo ? "Stereo" : "Mono", ...center(l.stereo), 11, rgba(TEXT, band.stereo || hoverOn("stereo") ? 1 : 0.6));
+
+      buttonBack(l.solo, soloed, hoverOn("solo"));
+      text("S", ...center(l.solo), 11, rgba(TEXT, soloed || hoverOn("solo") ? 1 : 0.6));
 
       // Mute: a circle with a slash, like a muted node.
       buttonBack(l.mute, !!band.muted, hoverOn("mute"));

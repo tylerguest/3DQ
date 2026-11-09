@@ -41,6 +41,7 @@ _3DQAudioProcessorEditor::_3DQAudioProcessorEditor (_3DQAudioProcessor& p)
 {
     sphereView.onBandsEdited = [this] (const sphere::BandSet& bands) { applyBandsFromSphere (bands); };
     sphereView.readLiveAudio = [this] (SphereView::LiveAudio& live) { readLiveAudio (live); };
+    sphereView.onSoloChanged = [this] (int band) { audioProcessor.setSoloBand (band); };
     sphereView.setBands (getBandsFromProcessor());
     addAndMakeVisible (sphereView);
 
@@ -60,6 +61,9 @@ _3DQAudioProcessorEditor::_3DQAudioProcessorEditor (_3DQAudioProcessor& p)
 
 _3DQAudioProcessorEditor::~_3DQAudioProcessorEditor()
 {
+    // Solo is only for while you're looking at it: the track must not stay filtered.
+    audioProcessor.setSoloBand (-1);
+
     for (int i = 0; i < threedq::maxBands; ++i)
     {
         const auto ids = _3DQAudioProcessor::getBandParamIDs (i);

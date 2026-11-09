@@ -23,6 +23,7 @@ export interface Band {
   gainDb: number;
   q: number;
   muted?: boolean; // kept on the sphere (settings remembered) but not applied
+  soloed?: boolean; // play only what this band works on (at most one band)
   // Dynamics: when the band's own signal goes over `threshold` (dBFS), its gain
   // moves from gainDb toward gainDb + range. range 0 = a static band.
   range?: number;
@@ -171,6 +172,13 @@ export function cutDisplacement(b: Band, d: [number, number, number]) {
   const lon = Math.atan2(d[0], d[2]);
   const db = cutResponseDb(b.type!, latToFreq(b.lat), b.slope ?? DEFAULT_CUT_SLOPE, latToFreq(lat));
   return gainShape(db) * MAX_CUT_DISPLACEMENT * bandOverlap(b, lon);
+}
+
+// The radius a surface is drawn at: past the knee it eases towards a limit, so
+// peaks stay in the window without a crease.
+export function surfaceRadius(r: number) {
+  const KNEE = 1.3, ROOM = 0.3;
+  return r > KNEE ? KNEE + ROOM * (1 - Math.exp((KNEE - r) / ROOM)) : r;
 }
 
 export function surfaceDisplacement(bands: Band[], dirs: [number, number, number][], d: [number, number, number]) {

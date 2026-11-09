@@ -35,6 +35,11 @@
     position and filters L and R alike, as a conventional EQ does; its detector
     follows the louder channel, so both channels always get the same gain.
 
+    Solo replaces the output with what one band works on, taken from the EQ's
+    input so other bands and the band's own gain don't colour it: the band-pass
+    at its frequency and Q (a shelf or cut: what it moves or removes), on its
+    axis only, or on L and R alike for a stereo band.
+
   ==============================================================================
 */
 
@@ -114,6 +119,8 @@ public:
             b.envelope = 0.0;
             b.dynamicDb = 0.0;
         }
+
+        solo.mix = solo.mixPrevious = 0.0;
     }
 
     // Live readouts for the GUI (safe to call from any thread).
@@ -146,12 +153,32 @@ public:
         }
     }
 
+    // Plays only what this band works on (see the top of this file), or goes back to the EQ.
+    void setSolo (const BandParams& p)
+    {
+        solo.on = true;
+        solo.targetLogFreq = std::log (std::clamp ((double) p.freq, (double) minFreq, (double) maxFreq));
+        solo.targetLogQ    = std::log (std::clamp ((double) p.q, (double) minQ, (double) maxQ));
+        solo.targetPhi     = stereoAxisAngle (p.posDeg);
+        solo.type = p.type;
+        solo.stereo = p.stereo;
+    }
+
+    void clearSolo()    { solo.on = false; }
+
     // In-place stereo processing.
     void process (float* left, float* right, int numSamples)
     {
         for (int start = 0; start < numSamples; start += subBlockSize)
         {
             const int n = std::min (subBlockSize, numSamples - start);
+            const bool soloing = solo.on || solo.mix > 0.0;
+
+            if (soloing)
+            {
+                std::copy_n (left + start, n, solo.inputLeft.begin());
+                std::copy_n (right + start, n, solo.inputRight.begin());
+            }
 
             for (size_t bi = 0; bi < bands.size(); ++bi)
             {
@@ -181,8 +208,8 @@ public:
 
                         if (dynamic)
                         {
-                            const double scL = runSideChain (b, b.sz1, b.sz2, inL);
-                            const double scR = runSideChain (b, b.szr1, b.szr2, inR);
+                            const double scL = runSection (b.sidechain, b.sidechain.z1, b.sidechain.z2, inL);
+                            const double scR = runSection (b.sidechain, b.sidechain.zr1, b.sidechain.zr2, inR);
                             followEnvelope (b, std::max (std::abs (scL), std::abs (scR)));
                         }
 
@@ -202,7 +229,7 @@ public:
                     const double c = uL * left[i] + uR * right[i];
 
                     if (dynamic)
-                        followEnvelope (b, std::abs (runSideChain (b, b.sz1, b.sz2, c)));
+                        followEnvelope (b, std::abs (runSection (b.sidechain, b.sidechain.z1, b.sidechain.z2, c)));
 
                     double y = c;
                     for (int k = 0; k < numSections; ++k)
@@ -221,6 +248,9 @@ public:
                 currentGainDb[bi].store ((float) (b.gainDb + b.dynamicDb), std::memory_order_relaxed);
                 currentLevelDb[bi].store ((float) levelDb, std::memory_order_relaxed);
             }
+
+            if (soloing)
+                applySolo (left + start, right + start, n);
         }
     }
 
@@ -258,18 +288,29 @@ private:
         int numSections = 1;
         double mix = 0.0, mixPrevious = 0.0; // 0..1 wet amount (ramped per sample)
 
+        Section sidechain;
+
         void clearState()
         {
             for (auto& f : sections) f.z1 = f.z2 = f.zr1 = f.zr2 = 0.0;
-            sz1 = sz2 = szr1 = szr2 = 0.0;
+            sidechain.z1 = sidechain.z2 = sidechain.zr1 = sidechain.zr2 = 0.0;
         }
 
         // Dynamics
         double rangeDb = 0.0, thresholdDb = -30.0;
         double envelope = 0.0;  // side-chain peak level (linear)
         double dynamicDb = 0.0; // current dynamic gain movement
-        double sb0 = 0.0, sb1 = 0.0, sb2 = 0.0, a1s = 0.0, a2s = 0.0; // side-chain filter
-        double sz1 = 0.0, sz2 = 0.0, szr1 = 0.0, szr2 = 0.0;
+    };
+
+    struct Solo
+    {
+        bool on = false, stereo = false;
+        FilterType type = FilterType::peak;
+        double targetLogFreq = 0.0, targetLogQ = 0.0, targetPhi = 0.0;
+        double logFreq = 0.0, logQ = 0.0, phi = 0.0;
+        double mix = 0.0, mixPrevious = 0.0; // 0 = the EQ's output, 1 = the solo
+        Band::Section filter;
+        std::array<float, subBlockSize> inputLeft {}, inputRight {}; // the EQ's input, this sub-block
     };
 
     // One transposed direct form II section.
@@ -278,14 +319,6 @@ private:
         const double out = f.b0 * in + z1;
         z1 = f.b1 * in - f.a1 * out + z2;
         z2 = f.b2 * in - f.a2 * out;
-        return out;
-    }
-
-    static double runSideChain (const Band& b, double& z1, double& z2, double in)
-    {
-        const double out = b.sb0 * in + z1;
-        z1 = b.sb1 * in - b.a1s * out + z2;
-        z2 = b.sb2 * in - b.a2s * out;
         return out;
     }
 
@@ -351,6 +384,90 @@ private:
         return true;
     }
 
+    // What a band works on, for its detector and for solo: a band-pass (RBJ, 0 dB
+    // peak gain) at its frequency and Q; for a shelf or cut, a Butterworth low- or
+    // high-pass covering what the shelf moves or the cut removes.
+    void designListenFilter (Band::Section& f, FilterType type, double freq, double q) const
+    {
+        const double w0    = 2.0 * pi * freq / sampleRate;
+        const double cosw0 = std::cos (w0);
+        const double sinw0 = std::sin (w0);
+
+        if (isShelfType (type) || isCutType (type))
+        {
+            const double alpha = sinw0 / std::sqrt (2.0);
+            const double s0 = 1.0 + alpha;
+            const double sign = type == FilterType::lowShelf || type == FilterType::lowCut ? 1.0 : -1.0;
+            f.b0 = (1.0 - sign * cosw0) / 2.0 / s0;
+            f.b1 = sign * (1.0 - sign * cosw0) / s0;
+            f.b2 = f.b0;
+            f.a1 = (-2.0 * cosw0) / s0;
+            f.a2 = (1.0 - alpha) / s0;
+        }
+        else
+        {
+            const double alpha = sinw0 / (2.0 * q);
+            const double s0 = 1.0 + alpha;
+            f.b0 = alpha / s0;
+            f.b1 = 0.0;
+            f.b2 = -alpha / s0;
+            f.a1 = (-2.0 * cosw0) / s0;
+            f.a2 = (1.0 - alpha) / s0;
+        }
+    }
+
+    // Crossfades this sub-block toward the solo, or back to the EQ's output.
+    void applySolo (float* left, float* right, int n)
+    {
+        if (solo.mix <= 0.0)
+        {
+            // Starting from silence: no glide, and nothing left over from last time.
+            solo.logFreq = solo.targetLogFreq;
+            solo.logQ    = solo.targetLogQ;
+            solo.phi     = solo.targetPhi;
+            auto& f = solo.filter;
+            f.z1 = f.z2 = f.zr1 = f.zr2 = 0.0;
+        }
+
+        solo.logFreq += (solo.targetLogFreq - solo.logFreq) * smoothingCoeff;
+        solo.logQ    += (solo.targetLogQ    - solo.logQ)    * smoothingCoeff;
+        solo.phi     += std::remainder (solo.targetPhi - solo.phi, pi) * smoothingCoeff;
+        solo.mix     += ((solo.on ? 1.0 : 0.0) - solo.mix) * smoothingCoeff;
+
+        if (! solo.on && solo.mix < 1.0e-3)
+            solo.mix = 0.0;
+
+        auto& f = solo.filter;
+        designListenFilter (f, solo.type, std::min (std::exp (solo.logFreq), 0.49 * sampleRate), std::exp (solo.logQ));
+
+        const double uL = std::cos (solo.phi), uR = std::sin (solo.phi);
+        const double mixStep = (solo.mix - solo.mixPrevious) / n;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const double inL = solo.inputLeft[(size_t) i], inR = solo.inputRight[(size_t) i];
+            double outL, outR;
+
+            if (solo.stereo)
+            {
+                outL = runSection (f, f.z1, f.z2, inL);
+                outR = runSection (f, f.zr1, f.zr2, inR);
+            }
+            else
+            {
+                const double y = runSection (f, f.z1, f.z2, uL * inL + uR * inR);
+                outL = uL * y;
+                outR = uR * y;
+            }
+
+            const double wet = solo.mixPrevious + mixStep * (i + 1);
+            left[i]  = (float) (left[i]  + (outL - left[i])  * wet);
+            right[i] = (float) (right[i] + (outR - right[i]) * wet);
+        }
+
+        solo.mixPrevious = solo.mix;
+    }
+
     // Filter coefficients for the band's current (smoothed) settings.
     void updateCoefficients (Band& b) const
     {
@@ -360,29 +477,7 @@ private:
         const double cosw0 = std::cos (w0);
         const double sinw0 = std::sin (w0);
 
-        // Side-chain: a band-pass (RBJ, 0 dB peak gain) at the band's frequency / Q;
-        // for a shelf, a Butterworth low- or high-pass covering what the shelf moves.
-        if (isShelfType (b.type))
-        {
-            const double alpha = sinw0 / std::sqrt (2.0);
-            const double s0 = 1.0 + alpha;
-            const double sign = b.type == FilterType::lowShelf ? 1.0 : -1.0;
-            b.sb0 = (1.0 - sign * cosw0) / 2.0 / s0;
-            b.sb1 = sign * (1.0 - sign * cosw0) / s0;
-            b.sb2 = b.sb0;
-            b.a1s = (-2.0 * cosw0) / s0;
-            b.a2s = (1.0 - alpha) / s0;
-        }
-        else
-        {
-            const double alpha = sinw0 / (2.0 * q);
-            const double s0 = 1.0 + alpha;
-            b.sb0 = alpha / s0;
-            b.sb1 = 0.0;
-            b.sb2 = -alpha / s0;
-            b.a1s = (-2.0 * cosw0) / s0;
-            b.a2s = (1.0 - alpha) / s0;
-        }
+        designListenFilter (b.sidechain, b.type, freq, q);
 
         if (b.type == FilterType::peak)
         {
@@ -467,6 +562,7 @@ private:
     double smoothingCoeff = 1.0;
     double attackCoeff = 1.0, releaseCoeff = 1.0;
     std::array<Band, maxBands> bands;
+    Solo solo;
     std::array<std::atomic<float>, maxBands> currentGainDb {};
     std::array<std::atomic<float>, maxBands> currentLevelDb {};
 };

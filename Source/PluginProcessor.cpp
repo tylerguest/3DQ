@@ -235,6 +235,11 @@ void _3DQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         eq.setBand (i, p);
     }
 
+    if (const int solo = soloBand.load (std::memory_order_relaxed); solo >= 0 && getBandParams (solo).enabled)
+        eq.setSolo (getBandParams (solo));
+    else
+        eq.clearSolo();
+
     eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples());
 
     // Feed the GUI's analyser with the processed output.

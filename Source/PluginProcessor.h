@@ -67,6 +67,10 @@ public:
     threedq::BandParams getBandParams (int slot) const;
     bool isBandMuted (int slot) const;
 
+    // Plays only what this band works on; -1 = the normal EQ. Not a parameter, so
+    // it's never automated or saved with the session.
+    void setSoloBand (int slot) { soloBand.store (slot, std::memory_order_relaxed); }
+
     // Live dynamics readouts for the GUI: a band's current total gain and the
     // level its threshold is compared against.
     float getLiveGainDb (int slot) const  { return eq.getCurrentGainDb (slot); }
@@ -106,6 +110,7 @@ private:
 
     std::array<std::array<float, analysisRingSize>, 2> analysisRing {};
     std::atomic<int> analysisWritePos { 0 };
+    std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     threedq::SphereEq eq;
 

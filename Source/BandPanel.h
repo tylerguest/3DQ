@@ -2,7 +2,7 @@
   ==============================================================================
 
     The band control panel that slides up from the ^ button: filter type,
-    stereo / mono, mute, remove, and a knob for each of the band's settings.
+    stereo / mono, solo, mute, remove, and a knob for each of the band's settings.
 
     Layout, hit-testing and value mapping are here, with drawing. SphereView
     owns the gestures and the shared state. Same maths as ui/src/bandPanel.ts.
@@ -25,7 +25,7 @@ constexpr int numFilterTypes = 5; // indexed by FilterType
 
 struct PanelTarget
 {
-    enum class Kind { none, toggle, background, previous, next, type, stereo, mute, remove, knob };
+    enum class Kind { none, toggle, background, previous, next, type, stereo, solo, mute, remove, knob };
 
     Kind kind = Kind::none;
     int index = 0; // which type or knob
@@ -33,9 +33,14 @@ struct PanelTarget
     bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index; }
 };
 
+// How much the panel and the on-screen buttons grow with the window. It follows
+// the window's smaller side, but more slowly than the window, so they don't
+// dominate a large one. Width and height are in component pixels.
+float panelScale (float width, float height);
+
 struct BandPanelLayout
 {
-    juce::Rectangle<float> panel, previous, title, next, stereo, mute, remove;
+    juce::Rectangle<float> panel, previous, title, next, stereo, solo, mute, remove;
     std::array<juce::Rectangle<float>, numFilterTypes> types;
     std::array<juce::Rectangle<float>, numPanelKnobs> knobs;
     juce::Point<float> toggleCentre;
@@ -56,7 +61,7 @@ struct PanelViewFit
     float zoomScale = 1, panDeltaY = 0;
 };
 
-PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY);
+PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY, SurfaceExtent extent);
 
 // Knob positions run 0..1.
 float knobPosition (const Band&, int knob);
@@ -66,6 +71,6 @@ bool knobEnabled (const Band&, int knob);
 bool knobIsStepped (const Band&, int knob);
 
 void drawBandPanel (juce::Graphics&, const BandPanelLayout&, float dpr, float openAmount,
-                    const Band* band, PanelTarget hover, int activeKnob);
+                    const Band* band, bool soloed, PanelTarget hover, int activeKnob);
 
 } // namespace sphere

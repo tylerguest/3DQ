@@ -1,8 +1,10 @@
 /*
   ==============================================================================
 
-    SphereField: the sphere's particles. Each frame it advances the springs,
-    the audio response and the energy map, and writes every glowing dot to a
+    SphereField: the sphere's particles. The surface's shape is the EQ alone;
+    a dot's size and brightness are the audio at its frequency and stereo
+    position, and it turns orange or red where the EQ is changing real signal.
+    Each frame it advances the springs and writes every glowing dot to a
     SpriteList. It knows nothing about the graphics API, so another backend can
     draw the same list by replacing SpriteRenderer alone.
 
@@ -25,6 +27,15 @@ struct Sprite
     float r, g, b;
     float alpha;
     float profile; // 0 = particle (crisp core + halo), 1 = tint (soft falloff)
+};
+
+// What's drawn behind the sphere, in device pixels (y down).
+struct Backdrop
+{
+    float centreX = 0, lightY = 0; // the middle of the shape as it looks
+    float sphereY = 0, radius = 1; // the sphere's own centre and size
+    float shadowY = 0, shadowHalfWidth = 1;
+    std::array<float, 3> haze {}; // 0..1 lows, mids, highs
 };
 
 struct SpriteStyle
@@ -63,6 +74,9 @@ public:
     void update (const BandSet& bands, const Camera& camera, const StereoSpectrum::Result& spectrum,
                  double timeSeconds, float dt, SpriteList& out);
 
+    // How strongly the lows, mids and highs glow behind the sphere: 0..1, slow.
+    const std::array<float, 3>& getHazeLevels() const    { return hazeLevels; }
+
 private:
     static constexpr int numSpectrumBands = StereoSpectrum::numBands;
     static constexpr int lonCells = 64;
@@ -89,8 +103,8 @@ private:
 
     int numParticles = 0;
     std::vector<float> pX, pY, pZ, pShell, pSize, pTwinkle, pTwinkleRate, pMid, pFreq, pCosLon, pSinLon, specPos, lonPos;
-    std::vector<int> pBucket;
-    std::vector<float> springOffset, springVelocity, audioOffset, audioVelocity, energy;
+    std::vector<int> pColour, drawOrder; // drawOrder: the far half first, so nearer balls cover it
+    std::vector<float> springOffset, springVelocity;
 
     std::vector<SpriteStyle> particleStyles, boostRingStyles, cutRingStyles;
     SpriteStyle midStyle {};
@@ -101,10 +115,7 @@ private:
     std::array<float, lonCells> cellLL {}, cellRR {}, cellLR {};
 
     float audioMix = 0;
-    float bassAverage = 0, bassOnset = 0;
-    float breath = 0, breathVelocity = 0;
-    float audioPeakRef = 0, audioMeanLift = 0;
-    float energyAge = 0, energyMapAmount = 0, energyPeak = 0, energyMeanHeat = 0;
+    std::array<float, 3> hazeLevels {};
 
     std::array<float, maxBands> vortexAmount;
 };

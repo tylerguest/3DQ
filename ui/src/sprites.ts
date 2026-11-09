@@ -7,13 +7,13 @@
 //     cloud and draw in a single call. Used whenever WebGL is available.
 //   - CanvasSpriteSink: Canvas 2D drawImage per dot. The fallback for web
 //     views without WebGL (e.g. GPU-less environments).
-// Both draw additively ("lighter") with the same glow profiles, so they look
-// the same.
+// Both draw the same two kinds of sprite, so they look the same: soft puffs
+// that mostly cover what's behind them, and glows that only add light.
 
 import * as THREE from "three";
 
 // Two glow shapes, matching the original Canvas 2D sprites:
-//   PARTICLE: white-hot centre -> colour -> faint halo
+//   PARTICLE: a small crisp core in a faint wisp of gas
 //   TINT:     colour centre -> soft falloff (vortex rings, Mid seam)
 export const SpriteProfile = { Particle: 0, Tint: 1 } as const;
 export type SpriteProfile = (typeof SpriteProfile)[keyof typeof SpriteProfile];
@@ -35,18 +35,27 @@ export interface SpriteSink {
 export class CanvasSpriteSink implements SpriteSink {
   constructor(private readonly ctx: CanvasRenderingContext2D, private readonly styles: SpriteStyle[]) {}
 
+  private profile: SpriteProfile = SpriteProfile.Tint;
+
   begin() {
+    this.profile = SpriteProfile.Tint;
     this.ctx.globalCompositeOperation = "lighter";
   }
 
   add(style: number, x: number, y: number, size: number, alpha: number) {
     if (alpha <= 0.003) return;
+    const s = this.styles[style];
+    if (s.profile !== this.profile) {
+      this.profile = s.profile;
+      this.ctx.globalCompositeOperation = s.profile === SpriteProfile.Particle ? "source-over" : "lighter";
+    }
     this.ctx.globalAlpha = alpha > 1 ? 1 : alpha;
-    this.ctx.drawImage(this.styles[style].image, x - size / 2, y - size / 2, size, size);
+    this.ctx.drawImage(s.image, x - size / 2, y - size / 2, size, size);
   }
 
   end() {
     this.ctx.globalAlpha = 1;
+    this.ctx.globalCompositeOperation = "lighter";
   }
 }
 
@@ -57,13 +66,13 @@ const vertexShader = /* glsl */ `
   attribute float aProfile;
   uniform vec2 uViewport;
   varying vec3 vColour;
+  varying float vSize;
   varying float vAlpha;
   varying float vProfile;
-  varying float vSize;
 
   void main() {
-    vSize = aSize;
     vColour = aColour;
+    vSize = aSize;
     vAlpha = aAlpha;
     vProfile = aProfile;
     // position.xy is already in device pixels (y down).
@@ -72,38 +81,37 @@ const vertexShader = /* glsl */ `
   }
 `;
 
-// Glow profiles (t = 0 centre .. 1 edge), output as premultiplied colour for
-// additive ONE/ONE blending == "lighter".
+// Sprite profiles (t = 0 centre .. 1 edge), output as premultiplied colour:
+// alpha covers what's behind, alpha 0 adds to it.
 const fragmentShader = /* glsl */ `
   varying vec3 vColour;
+  varying float vSize;
   varying float vAlpha;
   varying float vProfile;
-  varying float vSize;
 
   void main() {
     float t = length(gl_PointCoord - 0.5) * 2.0;
     if (t >= 1.0) discard;
 
-    vec3 rgb;
-    float a;
-
     if (vProfile < 0.5) {
-      // Particle: a crisp, anti-aliased bright core (about one pixel of
-      // edge softness whatever the sprite size) inside a faint halo.
-      float px = 2.0 / max(vSize, 1.0); // one pixel in t units
-      float coreR = 0.3;
-      float core = 1.0 - smoothstep(coreR - px, coreR + px, t);
-      float halo = 0.22 * pow(1.0 - t, 2.0);
-      rgb = mix(vColour, vec3(1.0), 0.35 * (1.0 - smoothstep(0.0, coreR, t)));
-      a = max(core, halo);
-    } else {
-      // Tint: 0 colour, 0.4 colour @ 0.35, 1 colour @ 0
-      rgb = vColour;
-      a = t < 0.4 ? mix(1.0, 0.35, t / 0.4) : mix(0.35, 0.0, (t - 0.4) / 0.6);
+      // Particle: a small crisp core inside a faint wisp of gas. The core's
+      // size is mostly in pixels, so big sprites stay sharp instead of
+      // stretching into a blur.
+      vec2 coord = (gl_PointCoord - 0.5) * 2.0;
+      float radiusPx = max(vSize * 0.5, 1.0);
+      float coreR = min((2.0 + 0.12 * radiusPx) / radiusPx, 1.0);
+      float core = pow(max(1.0 - t * t / (coreR * coreR), 0.0), 2.0);
+      float density = 0.82 * core + 0.2 * pow(1.0 - t * t, 3.0);
+      float shade = 0.72 + 0.35 * density + 0.3 * dot(coord, vec2(-0.56, -0.83));
+
+      // Covers most of what's behind it, so overlapping puffs stay their colour.
+      gl_FragColor = vec4(vColour * shade * density * vAlpha, 0.8 * density * vAlpha);
+      return;
     }
 
-    a *= vAlpha;
-    gl_FragColor = vec4(rgb * a, a);
+    // Tint: 0 colour, 0.4 colour @ 0.35, 1 colour @ 0. Alpha 0: purely additive.
+    float glow = t < 0.4 ? mix(1.0, 0.35, t / 0.4) : mix(0.35, 0.0, (t - 0.4) / 0.6);
+    gl_FragColor = vec4(vColour * glow * vAlpha, 0.0);
   }
 `;
 
@@ -144,8 +152,8 @@ export class GlSpriteSink implements SpriteSink {
       preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(1); // we size the drawing buffer in device pixels ourselves
-    // Opaque graphite, so glow adds to the background exactly as it does in the plugin.
-    this.renderer.setClearColor(0x111110, 1);
+    // See-through, so the backdrop canvas underneath shows.
+    this.renderer.setClearColor(0x000000, 0);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader,
@@ -157,9 +165,9 @@ export class GlSpriteSink implements SpriteSink {
       blending: THREE.CustomBlending,
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
       blendSrcAlpha: THREE.OneFactor,
-      blendDstAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
     });
 
     const points = new THREE.Points(this.geometry, this.material);

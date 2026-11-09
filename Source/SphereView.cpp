@@ -21,6 +21,9 @@ namespace
 {
 constexpr float nodeHitRadius = 16.0f;
 constexpr float dragThreshold = 4.0f;
+// A press this short counts as a click even if the hand drifted past dragThreshold.
+constexpr float clickMaxTravel = 10.0f;
+constexpr double clickMaxSeconds = 0.35;
 constexpr float rotateSpeed = 0.008f;     // radians per pixel
 constexpr float gainDbPerPixel = 0.1f;
 constexpr float autoRotate = 0.0035f;     // radians per 1/60 s
@@ -96,24 +99,62 @@ void SphereView::resized()
 
 void SphereView::setBands (const BandSet& bands)
 {
-    const std::lock_guard lock (stateLock);
+    {
+        const std::lock_guard lock (stateLock);
 
-    // Don't yank a band out from under an active drag.
-    if (state.dragged >= 0 || gainDrag.has_value() || knobDrag.has_value())
-        return;
+        // Don't yank a band out from under an active drag.
+        if (state.dragged >= 0 || gainDrag.has_value() || knobDrag.has_value())
+            return;
 
-    state.bands = bands;
+        state.bands = bands;
 
-    if (state.bands.find (state.hovered) == nullptr)
-        state.hovered = -1;
-    if (state.bands.find (wheelBand) == nullptr)
-        wheelBand = -1;
+        if (! state.restCentrePlaced)
+        {
+            state.restCentre = restCentreLocked();
+            state.restCentrePlaced = true;
+        }
+
+        if (state.bands.find (state.hovered) == nullptr)
+            state.hovered = -1;
+        if (state.bands.find (wheelBand) == nullptr)
+            wheelBand = -1;
+    }
+
+    publishSolo();
 }
 
 void SphereView::notifyBandsEdited (const BandSet& bands)
 {
     if (onBandsEdited != nullptr)
         onBandsEdited (bands);
+
+    publishSolo(); // the soloed band may be the one that just went
+}
+
+// Tells the audio side which band is soloed, if that changed. A held solo wins
+// over the panel's, and a band that's gone stops being soloed.
+void SphereView::publishSolo()
+{
+    int soloed;
+
+    {
+        const std::lock_guard lock (stateLock);
+
+        if (state.bands.find (state.soloLatched) == nullptr)
+            state.soloLatched = -1;
+        if (state.bands.find (state.soloHeld) == nullptr)
+            state.soloHeld = -1;
+
+        soloed = state.soloHeld >= 0 ? state.soloHeld : state.soloLatched;
+    }
+
+    if (soloed == publishedSolo)
+        return;
+
+    publishedSolo = soloed;
+
+    if (onSoloChanged != nullptr)
+        onSoloChanged (soloed);
 }
 
 juce::Point<float> SphereView::toDevice (juce::Point<float> position) const
@@ -133,12 +174,24 @@ Camera SphereView::makeCameraLocked (float width, float height, float scale) con
 {
     const float fitZoom = 1.0f + (state.panelFit.zoomScale - 1.0f) * state.panelAmount;
     const float fitPanY = state.panelFit.panDeltaY * state.panelAmount;
-    return Camera::make (width, height, state.yaw, state.pitch, state.zoom * fitZoom, state.panX * scale, (state.panY + fitPanY) * scale);
+    const float restPanY = state.restCentre * std::min (width, height) * sphereRadiusFraction * state.zoom * fitZoom * (1.0f - state.panelAmount);
+    return Camera::make (width, height, state.yaw, state.pitch, state.zoom * fitZoom, state.panX * scale, (state.panY + fitPanY) * scale + restPanY);
 }
 
 void SphereView::updatePanelFitLocked()
 {
-    state.panelFit = fitViewAbovePanel (componentWidth.load(), componentHeight.load(), state.zoom, state.panY);
+    state.panelFit = panelFitLocked (state.panY);
+}
+
+float SphereView::restCentreLocked() const
+{
+    const auto extent = surfaceExtent (state.bands, cameraLocked());
+    return (extent.top + extent.bottom) / 2.0f;
+}
+
+PanelViewFit SphereView::panelFitLocked (float panY) const
+{
+    return fitViewAbovePanel (componentWidth.load(), componentHeight.load(), state.zoom, panY, surfaceExtent (state.bands, cameraLocked()));
 }
 
 Vec3 SphereView::bandScreenPos (const Band& b, const BandDirections& dirs, const Camera& camera) const
@@ -178,8 +231,9 @@ int SphereView::hitBand (juce::Point<float> p, const Camera& camera) const
 
 bool SphereView::overHelpButton (juce::Point<float> position) const
 {
-    const juce::Point<float> centre ((float) getWidth() - helpButtonInset, (float) getHeight() - helpButtonInset);
-    return position.getDistanceFrom (centre) <= helpButtonRadius + 3.0f;
+    const float scale = panelScale ((float) getWidth(), (float) getHeight());
+    const juce::Point<float> centre ((float) getWidth() - helpButtonInset * scale, (float) getHeight() - helpButtonInset * scale);
+    return position.getDistanceFrom (centre) <= (helpButtonRadius + 3.0f) * scale;
 }
 
 // Keeps the sphere's centre inside the window, so it can never be lost off-screen.
@@ -303,6 +357,8 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 state.panelOpen = ! state.panelOpen;
                 if (state.panelOpen)
                     updatePanelFitLocked();
+                else
+                    state.restCentre = restCentreLocked(); // the panel's fit hides this until it slides away
                 break;
             case Kind::previous:  selectNeighbourLocked (-1); break;
             case Kind::next:      selectNeighbourLocked (1); break;
@@ -313,6 +369,7 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 changed = true;
                 break;
             case Kind::stereo:    band->stereo = ! band->stereo; changed = true; break;
+            case Kind::solo:      state.soloLatched = state.soloLatched == band->id ? -1 : band->id; break;
             case Kind::mute:      band->muted = ! band->muted; changed = true; break;
             case Kind::remove:
                 state.bands.remove (band->id);
@@ -338,6 +395,7 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
     if (changed)
         notifyBandsEdited (edited);
 
+    publishSolo();
     return true;
 }
 
@@ -464,6 +522,7 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
     {
         const std::lock_guard lock (stateLock);
         state.lastInteraction = nowSeconds();
+        state.recentring = false;
 
         if (e.mods.isMiddleButtonDown())
         {
@@ -514,6 +573,7 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
                 // to centre itself under the cursor.
                 Press press;
                 press.position = e.position;
+                press.time = nowSeconds();
                 press.band = hit;
 
                 if (band != nullptr)
@@ -526,6 +586,9 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
                     press.offsetX = s.x - device.x;
                     press.offsetY = s.y - device.y;
                     state.hovered = hit;
+
+                    if (e.mods.isAltDown())
+                        state.soloHeld = hit;
                 }
 
                 pressed = press;
@@ -537,6 +600,8 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
 
     if (changed)
         notifyBandsEdited (edited);
+
+    publishSolo();
 }
 
 void SphereView::pointerMoved (const juce::MouseEvent& e)
@@ -627,10 +692,21 @@ void SphereView::mouseDrag (const juce::MouseEvent& e)    { pointerMoved (e); }
 
 void SphereView::mouseUp (const juce::MouseEvent& e)
 {
+    {
+        const std::lock_guard lock (stateLock);
+        state.soloHeld = -1;
+    }
+
+    publishSolo();
+
     const std::lock_guard lock (stateLock);
     const auto now = nowSeconds();
 
-    if (state.rotating)
+    const bool clickedEmpty = pressed.has_value() && pressed->band < 0
+                              && (! state.rotating || (now - pressed->time < clickMaxSeconds
+                                                       && pressed->position.getDistanceFrom (e.position) < clickMaxTravel));
+
+    if (state.rotating && ! clickedEmpty)
     {
         // Fling with the speed of the last ~80 ms of movement; if the pointer
         // was held still before letting go, don't fling at all.
@@ -658,7 +734,7 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
 
     // A plain click on empty space clears the highlight. An open panel always
     // shows a band, so it keeps its selection.
-    if (pressed.has_value() && pressed->band < 0 && ! state.rotating && ! state.panelOpen)
+    if (clickedEmpty && ! state.panelOpen)
         state.selected = -1;
 
     state.rotating = false;
@@ -685,7 +761,7 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
         const std::lock_guard lock (stateLock);
         state.lastInteraction = nowSeconds();
 
-        if (commandHeld (e.mods)) // two quick gain drags shouldn't remove the band
+        if (commandHeld (e.mods) || e.mods.isAltDown()) // two quick gain drags or solos shouldn't remove the band
             return;
 
         const auto camera = cameraLocked();
@@ -711,10 +787,21 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
         }
         else
         {
-            const int slot = state.bands.freeSlot();
             Vec3 surface;
 
-            if (slot < 0 || ! camera.pickSphere (device.x, device.y, false, 1.0f, surface))
+            if (! camera.pickSphere (device.x, device.y, false, 1.0f, surface))
+            {
+                // The background: back to the centre, which with the panel open
+                // is the middle of the space above it.
+                state.recentring = true;
+                state.recentreFit = panelFitLocked (0.0f);
+                state.recentreRest = restCentreLocked();
+                return;
+            }
+
+            const int slot = state.bands.freeSlot();
+
+            if (slot < 0)
                 return;
 
             Band band;
@@ -862,7 +949,7 @@ void SphereView::renderOpenGL()
 
     BandSet bands;
     Camera camera;
-    int hovered, dragged, selected, activeKnob;
+    int hovered, dragged, selected, soloed, activeKnob;
     bool helpHovered, panelOpen;
     float panelAmount;
     PanelTarget panelHover;
@@ -895,6 +982,28 @@ void SphereView::renderOpenGL()
 
         state.pitch = std::clamp (state.pitch, -1.4f, 1.4f);
         clampPanLocked(); // the window may have shrunk
+
+        if (state.recentring)
+        {
+            const float keep = std::exp (-dt / 0.09f);
+            auto& fit = state.panelFit;
+            const auto& goal = state.recentreFit;
+            state.panX *= keep;
+            state.panY *= keep;
+            fit.zoomScale = goal.zoomScale + (fit.zoomScale - goal.zoomScale) * keep;
+            fit.panDeltaY = goal.panDeltaY + (fit.panDeltaY - goal.panDeltaY) * keep;
+            state.restCentre = state.recentreRest + (state.restCentre - state.recentreRest) * keep;
+
+            if (std::hypot (state.panX, state.panY) < 0.5f && std::abs (fit.panDeltaY - goal.panDeltaY) < 0.5f
+                && std::abs (state.restCentre - state.recentreRest) < 0.002f)
+            {
+                state.panX = state.panY = 0;
+                fit = goal;
+                state.restCentre = state.recentreRest;
+                state.recentring = false;
+            }
+        }
+
         state.yaw = std::remainder (state.yaw, twoPi);
 
         bands = state.bands;
@@ -906,6 +1015,7 @@ void SphereView::renderOpenGL()
             validateSelectionLocked();
 
         selected = state.selected;
+        soloed = state.soloHeld >= 0 ? state.soloHeld : state.soloLatched;
         panelOpen = state.panelOpen;
         panelHover = state.panelHover;
         activeKnob = knobDrag.has_value() ? knobDrag->knob : -1;
@@ -925,15 +1035,35 @@ void SphereView::renderOpenGL()
     glViewport (0, 0, width, height);
     glClearColor (17.0f / 255.0f, 17.0f / 255.0f, 16.0f / 255.0f, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT);
+
+    const auto extent = surfaceExtent (bands, camera, 18, 36); // every frame, so a coarse grid
+
+    if (! shownExtent.has_value())
+        shownExtent = extent;
+
+    const float ease = 1.0f - std::exp (-dt / 0.12f);
+    shownExtent->top += (extent.top - shownExtent->top) * ease;
+    shownExtent->bottom += (extent.bottom - shownExtent->bottom) * ease;
+    shownExtent->halfWidth += (extent.halfWidth - shownExtent->halfWidth) * ease;
+
+    Backdrop backdrop;
+    backdrop.radius = camera.radiusPx();
+    backdrop.centreX = camera.centreX();
+    backdrop.sphereY = camera.centreY();
+    backdrop.lightY = backdrop.sphereY - (shownExtent->top + shownExtent->bottom) / 2.0f * backdrop.radius;
+    backdrop.shadowY = backdrop.sphereY + (0.17f - shownExtent->bottom) * backdrop.radius;
+    backdrop.shadowHalfWidth = 0.9f * shownExtent->halfWidth * backdrop.radius;
+    backdrop.haze = field.getHazeLevels();
+    renderer.drawBackdrop (backdrop, width, height);
     renderer.draw (sprites, width, height);
 
     {
         auto overlay = juce::createOpenGLGraphicsContext (context, width, height);
         juce::Graphics g (*overlay);
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
-        drawTitle (g);
+        drawTitle (g, soloed);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount), dpr, panelAmount,
-                       bands.find (selected), panelHover, activeKnob);
+                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob);
         drawHelp (g, camera, helpHovered, dt);
     }
 
@@ -1190,14 +1320,24 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
         g.drawSingleLineText (lines[i], juce::roundToInt (x + padding), juce::roundToInt (y + padding + (float) i * lineHeight + font.getAscent()));
 }
 
-void SphereView::drawTitle (juce::Graphics& g)
+void SphereView::drawTitle (juce::Graphics& g, int soloed)
 {
     auto title = uiFont (22.0f * dpr, true);
     title.setExtraKerningFactor (0.09f);
 
     g.setFont (title);
     g.setColour (textColour);
-    g.drawSingleLineText ("3DQ", juce::roundToInt (20.0f * dpr), juce::roundToInt (16.0f * dpr + title.getAscent()));
+    const int x = juce::roundToInt (20.0f * dpr), baseline = juce::roundToInt (16.0f * dpr + title.getAscent());
+    g.drawSingleLineText ("3DQ", x, baseline);
+
+    // Solo changes what you hear, so it stays on show with the panel closed.
+    if (soloed >= 0)
+    {
+        g.setFont (uiFont (12.0f * dpr));
+        g.setColour (textColour.withAlpha (0.85f));
+        g.drawSingleLineText ("Solo  " + juce::String::charToString ((juce::juce_wchar) 0xb7) + "  Band " + juce::String (soloed + 1),
+                              x + juce::roundToInt (juce::GlyphArrangement::getStringWidth (title, "3DQ") + 14.0f * dpr), baseline);
+    }
 }
 
 // The ? button, and the list of controls that appears while hovering over it.
@@ -1205,29 +1345,32 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
 {
     helpAmount += ((hovered ? 1.0f : 0.0f) - helpAmount) * (1.0f - std::exp (-dt / 0.08f));
 
-    const float cx = camera.width - helpButtonInset * dpr;
-    const float cy = camera.height - helpButtonInset * dpr;
-    const float radius = helpButtonRadius * dpr;
+    const float unit = dpr * panelScale (camera.width / dpr, camera.height / dpr); // one scaled point, in device pixels
+    const float cx = camera.width - helpButtonInset * unit;
+    const float cy = camera.height - helpButtonInset * unit;
+    const float radius = helpButtonRadius * unit;
     const juce::Rectangle<float> button (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
     g.setColour (graphite.withAlpha (0.7f));
     g.fillEllipse (button);
     g.setColour (warmGrey.withAlpha (0.45f + 0.4f * helpAmount));
-    g.drawEllipse (button, 1.0f * dpr);
-    g.setFont (uiFont (12.0f * dpr, true));
+    g.drawEllipse (button, 1.0f * unit);
+    g.setFont (uiFont (12.0f * unit, true));
     g.setColour (textColour.withAlpha (0.55f + 0.45f * helpAmount));
     g.drawText ("?", button, juce::Justification::centred, false);
 
     if (helpAmount < 0.01f)
         return;
 
-    static constexpr std::array<std::pair<const char*, const char*>, 13> rows {{
+    static constexpr std::array<std::pair<const char*, const char*>, 15> rows {{
         { "Double-click sphere",        "Add band" },
         { "Double-click band",          "Remove band" },
         { "Drag band",                  "Move band" },
+        { "Alt+hold band",              "Solo while held" },
         { "Drag empty space",           "Rotate" },
         { "Scroll empty space",         "Zoom" },
         { "Hold wheel and drag",        "Pan view" },
+        { "Double-click background",    "Recentre view" },
         { "Scroll band or Ctrl+drag",   "Gain" },
         { "Shift+scroll band",          "Width (cuts: slope)" },
         { "Alt+scroll band",            "Dynamic range" },
@@ -1237,10 +1380,10 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
         { "Shift+double-click band",    "Peak / cuts / shelves" },
     }};
 
-    const auto font = uiFont (12.0f * dpr);
-    const float padding = 10.0f * dpr;
-    const float gap = 18.0f * dpr;
-    const float lineHeight = std::round (12.0f * dpr * 1.45f);
+    const auto font = uiFont (12.0f * unit);
+    const float padding = 10.0f * unit;
+    const float gap = 18.0f * unit;
+    const float lineHeight = std::round (12.0f * unit * 1.45f);
 
     float gestureWidth = 0, actionWidth = 0;
     for (const auto& [gesture, action] : rows)
@@ -1251,14 +1394,14 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
 
     const float width = padding * 2.0f + gestureWidth + gap + actionWidth;
     const float height = padding * 2.0f + lineHeight * (float) rows.size();
-    const float x = std::max (8.0f * dpr, cx + radius - width);
-    const float y = std::max (8.0f * dpr, cy - radius - 8.0f * dpr - height);
+    const float x = std::max (8.0f * unit, cx + radius - width);
+    const float y = std::max (8.0f * unit, cy - radius - 8.0f * unit - height);
     const juce::Rectangle<float> panel (x, y, width, height);
 
     g.setColour (graphite.withAlpha (0.92f * helpAmount));
-    g.fillRoundedRectangle (panel, 6.0f * dpr);
+    g.fillRoundedRectangle (panel, 6.0f * unit);
     g.setColour (warmGrey.withAlpha (0.45f * helpAmount));
-    g.drawRoundedRectangle (panel, 6.0f * dpr, 1.0f * dpr);
+    g.drawRoundedRectangle (panel, 6.0f * unit, 1.0f * unit);
 
     g.setFont (font);
     const int baselineOffset = juce::roundToInt (y + padding + font.getAscent());

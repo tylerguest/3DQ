@@ -27,7 +27,8 @@ html, body, #root {
   cursor: grab;
 }
 
-/* WebGL particle layer sits under the 2D overlay and ignores the mouse. */
+/* The backdrop and WebGL particle layers sit under the 2D overlay and ignore the mouse. */
+.sphere canvas.backdrop-layer,
 .sphere canvas.gl-layer {
   pointer-events: none;
 }

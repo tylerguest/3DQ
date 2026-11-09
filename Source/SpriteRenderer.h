@@ -25,7 +25,13 @@ public:
     void release();
     void draw (const SpriteList& sprites, int width, int height);
 
+    // Fills the frame; call before draw().
+    void drawBackdrop (const Backdrop& backdrop, int width, int height);
+
 private:
+    std::unique_ptr<juce::OpenGLShaderProgram> backdropShader;
+    juce::uint32 backdropVertexArray = 0;
+    int backdropViewport = -1, backdropLight = -1, backdropSphere = -1, backdropShadow = -1, backdropHaze = -1;
     std::unique_ptr<juce::OpenGLShaderProgram> shader;
     juce::uint32 vertexArray = 0, cornerBuffer = 0, spriteBuffer = 0;
     int viewportUniform = -1;

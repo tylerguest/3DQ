@@ -26,15 +26,20 @@ RGB mixRGB (RGB a, RGB b, float t)
 
 constexpr int surfacePoints = 16000;
 constexpr int hazePoints = 2200;
-constexpr int numColourBuckets = 32;
+constexpr int numFrequencyColours = 24;
+constexpr int tintSteps = 7;
+constexpr int numTints = 1 + 2 * tintSteps; // none, then towards boost, then towards cut
 constexpr int numRingColours = 24;
 constexpr float poleDim = 0.82f;
-constexpr float particleAlpha = 0.5f;
+constexpr float particleAlpha = 0.65f;
 constexpr float particleSize = 0.78f;
+// A soft light from the upper left, fixed to the view, so the sphere has form.
+constexpr float lightX = -0.36f, lightY = 0.62f, lightZ = 0.7f;
+constexpr float lightFloor = 0.74f, lightAmount = 0.46f;
 constexpr float midLineWidth = 0.035f;
 
-// Frequency colours by position on the log axis. They stay clear of orange and
-// red, which only ever mean boost and cut.
+// A dot's colour is its frequency, on the log axis, until the EQ is changing
+// real signal there. Orange and red only ever mean boost and cut.
 struct ColourStop
 {
     float t;
@@ -48,6 +53,9 @@ constexpr std::array<ColourStop, 5> frequencyColours {{
     { 0.75f, { 232, 208, 122 } }, // presence: straw
     { 1.0f,  { 238, 232, 220 } }, // air: bone
 }};
+
+constexpr RGB boostColour { 255, 120, 24 };
+constexpr RGB cutColour   { 232, 52, 48 };
 
 constexpr std::array<RGB, 3> boostRingRamp {{ { 255, 232, 176 }, { 255, 170, 60 }, { 255, 104, 14 } }};
 constexpr std::array<RGB, 3> cutRingRamp   {{ { 255, 200, 186 }, { 235, 70, 62 }, { 186, 16, 22 } }};
@@ -71,9 +79,9 @@ SpriteStyle makeStyle (RGB c, float profile)
     return { c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, profile };
 }
 
-int bucketOf (float y)
+int frequencyColourOf (float y)
 {
-    return (int) std::lround ((std::asin (std::clamp (y, -1.0f, 1.0f)) / pi + 0.5f) * (numColourBuckets - 1));
+    return (int) std::lround ((std::asin (std::clamp (y, -1.0f, 1.0f)) / pi + 0.5f) * (numFrequencyColours - 1));
 }
 
 float powerToLevel (float power)
@@ -86,25 +94,23 @@ float powerToLevel (float power)
 // out the frame-to-frame noise of the analysis.
 constexpr float spectrumAttack = 0.035f;
 constexpr float spectrumRelease = 0.24f;
+constexpr float hazeAttack = 0.25f, hazeRelease = 0.9f; // seconds
 constexpr std::array<float, 5> blurTaps { 0.06f, 0.24f, 0.4f, 0.24f, 0.06f };
-constexpr int bassBands = 12; // 20 Hz .. ~110 Hz
 
 constexpr float springOmega = 2.0f * pi * 4.5f;
 constexpr float springDamping = 0.42f;
 constexpr float springStep = 1.0f / 120.0f;
 
-constexpr float audioOmega = 2.0f * pi * 4.2f; // critically damped: glides with the music
-constexpr float audioHeight = 0.28f;           // radius added at the loudest spot in the mix
-constexpr float audioWindow = 36.0f / 60.0f;   // moves over the top 36 dB, in level units
-constexpr float audioCentring = 0.7f;          // how much of the average lift is taken back out
-constexpr float audioSurge = 0.8f;
-constexpr float audioSurgeMax = 0.2f;
-constexpr float surfaceKnee = 1.3f;
-constexpr float surfaceRoom = 0.3f;
 
-constexpr float energyMemory = 6.0f;           // seconds averaged while audio plays
-constexpr float energyFade = 20.0f;            // seconds to fade out after audio stops
-constexpr float energyRange = 24.0f / 60.0f;   // shows the top 24 dB, in level units
+// Audio, on a fixed scale in level units (60 dB = 1).
+constexpr float levelRangeDb = 60.0f;
+constexpr float loudFloor = 0.2f, loudWidth = 0.6f;  // -68 dB to -32 dB per band
+constexpr float quietAlpha = 0.4f, loudAlpha = 1.5f, quietSize = 0.75f, loudSize = 1.75f;
+
+// How much of a dot's colour the EQ gets: full at this many dB of change, on
+// signal at least this loud coming in.
+constexpr float tintFullDb = 12.0f;
+constexpr float tintFloor = 0.25f, tintWidth = 0.3f;
 
 constexpr int vortexRings = 6;
 constexpr int beltRingsPerSide = 3;
@@ -144,10 +150,11 @@ void SphereField::buildParticles()
     const auto n = (size_t) numParticles;
 
     for (auto* v : { &pX, &pY, &pZ, &pShell, &pSize, &pTwinkle, &pTwinkleRate, &pMid, &pFreq, &pCosLon, &pSinLon,
-                     &specPos, &lonPos, &springOffset, &springVelocity, &audioOffset, &audioVelocity, &energy })
+                     &specPos, &lonPos, &springOffset, &springVelocity })
         v->assign (n, 0.0f);
 
-    pBucket.assign (n, 0);
+    pColour.assign (n, 0);
+    drawOrder.assign (n, 0);
 
     const float goldenAngle = pi * (3.0f - std::sqrt (5.0f));
     const float sizeScale = std::sqrt (5000.0f / surfacePoints);
@@ -191,7 +198,7 @@ void SphereField::buildParticles()
         pY[s] = y;
         pZ[s] = z;
         pShell[s] = shell;
-        pBucket[s] = bucketOf (y);
+        pColour[s] = frequencyColourOf (y);
         pTwinkle[s] = randomFloat() * twoPi;
 
         // Mid (centre pan) meridian: lon 0 is the x = 0, z > 0 half of the sphere.
@@ -212,8 +219,15 @@ void SphereField::buildParticles()
 
 void SphereField::buildStyles()
 {
-    for (int i = 0; i < numColourBuckets; ++i)
-        particleStyles.push_back (makeStyle (colourForFrequency ((float) i / (numColourBuckets - 1)), 0.0f));
+    for (int f = 0; f < numFrequencyColours; ++f)
+    {
+        const auto base = colourForFrequency ((float) f / (numFrequencyColours - 1));
+        particleStyles.push_back (makeStyle (base, 0.0f));
+
+        for (const auto target : { boostColour, cutColour })
+            for (int i = 1; i <= tintSteps; ++i)
+                particleStyles.push_back (makeStyle (mixRGB (base, target, (float) i / tintSteps), 0.0f));
+    }
 
     midStyle = makeStyle ({ 255, 252, 244 }, 1.0f);
 
@@ -273,13 +287,19 @@ void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float 
     const float target = powerToLevel (peak) > 0.02f ? 1.0f : 0.0f;
     audioMix += (target - audioMix) * (1.0f - std::pow (0.94f, dt * 60.0f));
 
-    float bass = 0;
-    for (size_t b = 0; b < (size_t) bassBands; ++b)
-        bass += (heldLL[b] + heldRR[b]) / 2.0f;
+    // The backdrop's glow: the loudest band in each third of the spectrum, on
+    // the same fixed scale as the dots, but slow enough to read as weather.
+    for (size_t zone = 0; zone < hazeLevels.size(); ++zone)
+    {
+        float loudest = 0;
 
-    const float bassLevel = powerToLevel (bass);
-    bassAverage += (bassLevel - bassAverage) * (1.0f - std::exp (-dt / 0.35f));
-    bassOnset = std::max (0.0f, bassLevel - bassAverage) * audioMix;
+        for (int b = (int) zone * numSpectrumBands / 3; b < ((int) zone + 1) * numSpectrumBands / 3; ++b)
+            loudest = std::max (loudest, (smoothLL[(size_t) b] + smoothRR[(size_t) b]) / 2.0f);
+
+        const float level = std::clamp ((powerToLevel (loudest) - loudFloor) / loudWidth, 0.0f, 1.0f);
+        const float time = level > hazeLevels[zone] ? hazeAttack : hazeRelease;
+        hazeLevels[zone] += (level - hazeLevels[zone]) * (1.0f - std::exp (-dt / time));
+    }
 }
 
 void SphereField::updateLevelTable()
@@ -516,15 +536,6 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     const float stepDt = dt / (float) steps;
     const float kSpring = springOmega * springOmega;
     const float cSpring = 2.0f * springDamping * springOmega;
-    const float kAudio = audioOmega * audioOmega;
-    const float cAudio = 2.0f * audioOmega;
-
-    // Whole-sphere breath: kicked by bass onsets.
-    for (int s = 0; s < steps; ++s)
-    {
-        breathVelocity += (kSpring * 0.6f * (bassOnset * 0.09f - breath) - cSpring * 0.6f * breathVelocity) * stepDt;
-        breath += breathVelocity * stepDt;
-    }
 
     // Bands, prepared once per frame. Muted bands drop out.
     std::array<float, maxBands> bX, bY, bZ, bAmp, bInvW2, cFc, cTwoN, cCos, cSin;
@@ -586,28 +597,18 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
     const float cx = camera.centreX(), cy = camera.centreY(), rPx = camera.radiusPx();
     const float cosYaw = camera.cosYaw, sinYaw = camera.sinYaw, cosPitch = camera.cosPitch, sinPitch = camera.sinPitch;
-    const float breathScale = 1.0f + breath;
     const float sizeBase = particleSize * rPx * 0.05f;
-    const float audioDim = 1.0f - 0.3f * audioMix;
-    const float audioBright = 0.45f * audioMix;
 
-    // Averages over everything heard so far until the memory is full, so a
-    // usable map appears within a second instead of slowly filling up.
-    const bool energyActive = audioMix > 0.5f;
-    if (energyMapAmount < 0.01f && ! energyActive)
-        energyAge = 0;
-    if (energyActive)
-        energyAge = std::min (energyMemory, energyAge + dt);
-
-    const float energyRate = energyActive ? 1.0f - std::exp (-dt / std::max (0.1f, energyAge)) : 0.0f;
-    energyMapAmount += energyActive ? (1.0f - energyMapAmount) * (1.0f - std::exp (-dt / 0.8f))
-                                    : -energyMapAmount * (1.0f - std::exp (-dt / energyFade));
-    const float energyFloor = energyPeak - energyRange;
-    float nextEnergyPeak = 0, heatSum = 0;
-    const float audioFloor = audioPeakRef - audioWindow;
-    float framePeak = 0, shapedSum = 0;
+    int backCount = 0, frontStart = numParticles;
 
     for (int i = 0; i < numParticles; ++i)
+    {
+        const auto s = (size_t) i;
+        const bool isFar = pY[s] * sinPitch + (pZ[s] * cosYaw - pX[s] * sinYaw) * cosPitch < 0;
+        drawOrder[(size_t) (isFar ? backCount++ : --frontStart)] = i;
+    }
+
+    for (const int i : drawOrder)
     {
         const auto n = (size_t) i;
         const float dx = pX[n], dy = pY[n], dz = pZ[n];
@@ -661,44 +662,19 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
             disp = limitDisplacement (disp);
 
         const float heardLevel = reactive ? audioLevelAt (i) : 0.0f;
-        framePeak = std::max (framePeak, heardLevel);
+        const float loud = std::clamp ((heardLevel - loudFloor) / loudWidth, 0.0f, 1.0f);
 
-        float heard = energy[n];
-        if (energyActive)
-            energy[n] = heard += (heardLevel - heard) * energyRate;
-        nextEnergyPeak = std::max (nextEnergyPeak, heard);
+        // Boost or cut here in dB: the inverse of the shape curve. The analysis
+        // hears the EQ's output, so its change is taken back out to find what
+        // came in; a deep cut on a loud sound still counts.
+        float tint = 0;
 
-        const float heat = std::clamp ((heard - energyFloor) / energyRange, 0.0f, 1.0f);
-        heatSum += heat;
-        const float heatDelta = energyMapAmount * (heat - energyMeanHeat);
-
-        // Each spot moves by its level relative to the loudest part of the mix,
-        // less most of the average so the sphere changes shape rather than just
-        // inflating, plus a push whenever it jumps above its own recent average.
-        const float relative = std::clamp ((heardLevel - audioFloor) / audioWindow, 0.0f, 1.0f);
-        const float shaped = relative * std::sqrt (relative);
-        shapedSum += shaped;
-        const float surge = std::clamp (heardLevel - heard, 0.0f, audioSurgeMax);
-        const float audioTarget = reactive ? audioMix * ((shaped - audioCentring * audioMeanLift) * audioHeight + surge * audioSurge) : 0.0f;
-
-        float lift = audioOffset[n], liftVelocity = audioVelocity[n];
-
-        if (lift != audioTarget || liftVelocity != 0)
+        if (reactive && disp != 0)
         {
-            for (int s = 0; s < steps; ++s)
-            {
-                liftVelocity += (kAudio * (audioTarget - lift) - cAudio * liftVelocity) * stepDt;
-                lift += liftVelocity * stepDt;
-            }
-
-            if (std::abs (lift) < 1.0e-5f && audioTarget == 0 && std::abs (liftVelocity) < 1.0e-4f)
-                lift = liftVelocity = 0;
-
-            audioOffset[n] = lift;
-            audioVelocity[n] = liftVelocity;
+            const float db = maxGainDb * std::pow (std::min (1.0f, std::abs (disp) / (disp > 0 ? maxBoostDisplacement : maxCutDisplacement)), 1.0f / 0.7f);
+            const float incoming = std::clamp ((heardLevel + (disp > 0 ? -db : db) / levelRangeDb - tintFloor) / tintWidth, 0.0f, 1.0f);
+            tint = audioMix * incoming * incoming * (3.0f - 2.0f * incoming) * std::pow (std::min (1.0f, db / tintFullDb), 0.6f);
         }
-
-        const float level = lift > 0 ? std::min (1.0f, std::sqrt (lift / audioHeight)) : 0.0f;
 
         float offset = springOffset[n], velocity = springVelocity[n];
 
@@ -721,12 +697,10 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
             springVelocity[n] = velocity;
         }
 
-        float surface = pShell[n] + offset + lift;
-        if (surface > surfaceKnee)
-            surface = surfaceKnee + surfaceRoom * (1.0f - std::exp ((surfaceKnee - surface) / surfaceRoom));
+        const float surface = surfaceRadius (pShell[n] + offset);
 
         // The floor stops a spring overshoot flipping a point through the centre.
-        const float r = std::max (0.05f, surface) * breathScale;
+        const float r = std::max (0.05f, surface);
         const float mx = dx * r, my = dy * r, mz = dz * r;
         const float x1 = mx * cosYaw + mz * sinYaw;
         const float z1 = -mx * sinYaw + mz * cosYaw;
@@ -740,22 +714,21 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         const float front = std::clamp ((z + 0.7f) / 1.4f, 0.0f, 1.0f);
         const float depth = front * front * (3.0f - 2.0f * front);
         const float facing = 0.1f + 0.9f * depth;
+        const float lit = lightFloor + lightAmount * std::max (0.0f, (x1 * lightX + vy * lightY + z * lightZ) / r);
         const float twinkle = 0.88f + 0.12f * std::sin (pTwinkle[n] + time * pTwinkleRate[n]);
-        const float amount = std::clamp (disp / 0.2f, -1.0f, 1.0f); // cuts darken, boosts brighten
-        const float audioGain = audioDim + audioBright * level;
-        const float size = sizeBase * pSize[n] * persp * (1.0f + 0.15f * level) * (0.75f + 0.25f * depth) * (1.0f + 0.8f * heatDelta);
+        const float audioGain = 1.0f + audioMix * (quietAlpha + (loudAlpha - quietAlpha) * loud - 1.0f);
+        const float audioSize = 1.0f + audioMix * (quietSize + (loudSize - quietSize) * loud - 1.0f);
+        const float size = sizeBase * pSize[n] * persp * audioSize * (0.75f + 0.25f * depth);
+        const int step = (int) std::lround (tint * tintSteps);
+        const int style = pColour[n] * numTints + (step == 0 ? 0 : (disp > 0 ? step : step + tintSteps));
 
-        out.add (particleStyles[(size_t) pBucket[n]], sx, sy, size,
-                 particleAlpha * facing * twinkle * audioGain * (amount < 0 ? 1.0f + amount * 0.8f : 1.0f + amount * 0.3f) * (1.0f + 1.3f * heatDelta));
+        // A heavily cut dot has lost its audio but still needs to show its colour.
+        out.add (particleStyles[(size_t) style], sx, sy, size,
+                 particleAlpha * facing * lit * twinkle * std::max (audioGain, 0.35f + 0.6f * tint));
 
         if (pMid[n] > 0)
             out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);
     }
-
-    energyPeak = nextEnergyPeak;
-    audioPeakRef = framePeak > audioPeakRef ? framePeak : audioPeakRef + (framePeak - audioPeakRef) * (1.0f - std::exp (-dt / 4.0f));
-    audioMeanLift = shapedSum / (float) numParticles;
-    energyMeanHeat = heatSum / (float) numParticles;
 
     const auto dirs = directionsOf (bands);
     for (const auto& b : bands)

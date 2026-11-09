@@ -7,8 +7,10 @@
       drag empty space        rotate
       scroll empty space      zoom
       hold wheel and drag     pan the view
+      double-click background recentre the view
       double-click sphere     add a band there
       drag a node             move it (height = frequency, around = stereo position)
+      Alt+hold a node         solo it while held; drag to sweep it
       scroll on a node        gain
       Ctrl/Cmd+drag a node    gain
       Shift+scroll on node    width (Q); on a cut, its slope
@@ -54,6 +56,7 @@ public:
     // Set these before the view is shown.
     std::function<void (const sphere::BandSet&)> onBandsEdited; // message thread
     std::function<void (LiveAudio&)> readLiveAudio;             // render thread
+    std::function<void (int band)> onSoloChanged;               // message thread; -1 = none
 
     // Bands pushed from outside (host automation, preset load). Ignored during a drag.
     void setBands (const sphere::BandSet& bands);
@@ -78,6 +81,7 @@ private:
     struct Press
     {
         juce::Point<float> position;
+        double time = 0;
         int band = -1;
         float offsetX = 0, offsetY = 0, radius = 1;
     };
@@ -99,9 +103,16 @@ private:
         sphere::BandSet bands;
         float yaw = 0, pitch = -0.35f, zoom = 0.905f, yawVelocity = 0, pitchVelocity = 0;
         float panX = 0, panY = 0; // component pixels
+        bool recentring = false;
+        sphere::PanelViewFit recentreFit; // where a recentre ends up with the panel open
+        // Panel closed: how far below the window's centre the sphere's centre sits,
+        // in sphere radii, so the EQ'd shape is what looks centred.
+        float restCentre = 0, recentreRest = 0;
+        bool restCentrePlaced = false;
         bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
         sphere::PanelTarget panelHover;
         int selected = -1; // the band last clicked: highlighted, and what the panel controls
+        int soloLatched = -1, soloHeld = -1; // from the panel's S button, and Alt+hold on a node
         float panelAmount = 0; // eased 0..1, as the panel slides
         sphere::PanelViewFit panelFit;
         int hovered = -1, dragged = -1;
@@ -117,6 +128,8 @@ private:
     sphere::Camera cameraLocked() const;
     sphere::Camera makeCameraLocked (float width, float height, float scale) const;
     void updatePanelFitLocked();
+    sphere::PanelViewFit panelFitLocked (float panY) const;
+    float restCentreLocked() const;
     sphere::Vec3 bandScreenPos (const sphere::Band&, const sphere::BandDirections&, const sphere::Camera&) const;
     float handleRadius (const sphere::Band&, const sphere::BandDirections&) const;
     int hitBand (juce::Point<float> devicePosition, const sphere::Camera&) const;
@@ -136,12 +149,13 @@ private:
     bool panelWheel (const juce::MouseEvent&, float delta);
 
     void notifyBandsEdited (const sphere::BandSet&);
+    void publishSolo();
     juce::Point<float> toDevice (juce::Point<float> position) const;
 
     void drawOverlay (juce::Graphics&, const sphere::BandSet&, const sphere::Camera&, int hovered, int dragged, int selected, float dt);
     void drawNode (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, float emphasis, bool selected);
     void drawLabel (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, const sphere::Camera&, float liveLevelDb);
-    void drawTitle (juce::Graphics&);
+    void drawTitle (juce::Graphics&, int soloed);
     void drawHelp (juce::Graphics&, const sphere::Camera&, bool hovered, float dt);
 
     juce::OpenGLContext context;
@@ -153,6 +167,7 @@ private:
     // Render thread only.
     double lastFrameTime = 0;
     float autoBlend = 0;
+    std::optional<sphere::SurfaceExtent> shownExtent; // eased, as the surface's springs ease
     float helpAmount = 0;
     std::array<float, sphere::maxBands> nodeEmphasis {};
     float dpr = 1;
@@ -175,6 +190,7 @@ private:
     int wheelBand = -1;
     double lastWheelTime = 0;
     float slopeAccumulator = 0;
+    int publishedSolo = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SphereView)
 };

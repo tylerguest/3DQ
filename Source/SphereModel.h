@@ -247,6 +247,14 @@ inline float surfaceDisplacement (const BandSet& bands, const BandDirections& di
     return limitDisplacement (r);
 }
 
+// The radius a surface is drawn at: past the knee it eases towards a limit, so
+// peaks stay in the window without a crease.
+inline float surfaceRadius (float r)
+{
+    constexpr float knee = 1.3f, room = 0.3f;
+    return r > knee ? knee + room * (1.0f - std::exp ((knee - r) / room)) : r;
+}
+
 // View maths. All positions are in device pixels; +z faces the viewer.
 struct Camera
 {
@@ -318,6 +326,40 @@ struct Camera
         return true;
     }
 };
+
+// How far above and below the centre of view the EQ'd surface reaches on screen,
+// in sphere radii (up is positive). The EQ can make the shape very lopsided.
+struct SurfaceExtent
+{
+    float top = 1, bottom = -1, halfWidth = 1;
+};
+
+inline SurfaceExtent surfaceExtent (const BandSet& bands, const Camera& camera, int rows = 36, int columns = 72)
+{
+    const auto dirs = directionsOf (bands);
+    SurfaceExtent extent { 0, 0, 0 };
+
+    for (int row = 0; row < rows; ++row)
+    {
+        const float lat = -halfPi + pi * (float) row / (float) (rows - 1);
+        const float cosLat = std::cos (lat), sinLat = std::sin (lat);
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const float lon = twoPi * (float) column / (float) columns;
+            const Vec3 d { cosLat * std::sin (lon), sinLat, cosLat * std::cos (lon) };
+            const float r = surfaceRadius (1.0f + surfaceDisplacement (bands, dirs, d));
+            const auto p = camera.toView ({ d.x * r, d.y * r, d.z * r });
+            const float perspective = cameraDistance / (cameraDistance - p.z);
+            const float y = p.y * perspective;
+            extent.halfWidth = std::max (extent.halfWidth, std::abs (p.x * perspective));
+            extent.top = std::max (extent.top, y);
+            extent.bottom = std::min (extent.bottom, y);
+        }
+    }
+
+    return extent;
+}
 
 inline void setLatLon (Band& b, Vec3 d)
 {

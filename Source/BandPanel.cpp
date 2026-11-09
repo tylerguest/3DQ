@@ -20,16 +20,12 @@ constexpr float panelBottomInset = 10.0f;
 constexpr float toggleRadius = 10.0f;
 constexpr float toggleClosedInset = 24.0f; // from the window's bottom edge to the button's centre
 constexpr float panelViewGap = 6.0f;       // between the sphere's room and the ^ button on the panel's edge
-constexpr float sphereExtent = 1.2f;       // room allowed per unit of radius: perspective, plus some bump
+constexpr float panelFitMargin = 10.0f;    // kept clear above and below the sphere when it is fitted
 constexpr float knobRadius = 14.0f;
 constexpr float knobStartAngle = -2.35619f; // 12 o'clock is 0, clockwise
 constexpr float knobSweep = 4.71239f;
 
 enum Knob { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob };
-
-// Grows with the window's smaller side, but more slowly than the window, so it
-// doesn't dominate a large one.
-float panelScale (float width, float height)    { return std::max (1.0f, std::sqrt (std::min (width, height) / panelReferenceSize)); }
 
 float qCeiling (const Band& b)    { return b.isShelf() ? threedq::maxShelfQ : threedq::maxQ; }
 
@@ -131,6 +127,11 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
 }
 }
 
+float panelScale (float width, float height)
+{
+    return std::max (1.0f, std::sqrt (std::min (width, height) / panelReferenceSize));
+}
+
 BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount)
 {
     BandPanelLayout l;
@@ -153,8 +154,9 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
         l.types[(size_t) i] = { x + 100.0f + 24.0f * (float) i, headerY, 24.0f, headerH };
 
     l.remove = { right - 22.0f, headerY, 22.0f, headerH };
-    l.mute = { right - 48.0f, headerY, 22.0f, headerH };
-    l.stereo = { right - 114.0f, headerY, 60.0f, headerH };
+    l.mute = { right - 46.0f, headerY, 22.0f, headerH };
+    l.solo = { right - 70.0f, headerY, 22.0f, headerH };
+    l.stereo = { right - 114.0f, headerY, 44.0f, headerH };
 
     const float knobWidth = (panelWidth - 24.0f) / (float) numPanelKnobs;
     for (int i = 0; i < numPanelKnobs; ++i)
@@ -180,6 +182,7 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
         if (previous.contains (p))    return { Kind::previous };
         if (next.contains (p))        return { Kind::next };
         if (stereo.contains (p))      return { Kind::stereo };
+        if (solo.contains (p))        return { Kind::solo };
         if (mute.contains (p))        return { Kind::mute };
         if (remove.contains (p))      return { Kind::remove };
 
@@ -195,13 +198,17 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
     return { Kind::background };
 }
 
-PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY)
+PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY, SurfaceExtent extent)
 {
     const float room = height - panelScale (width, height) * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
     const float radius = std::min (width, height) * sphereRadiusFraction * zoom;
-    const float fittedRadius = std::min (radius, room / 2.0f / sphereExtent);
-    const float extent = fittedRadius * sphereExtent;
-    const float centre = std::min (std::max (room / 2.0f + panY, extent), room - extent);
+    const float fittedRadius = std::min (radius, (room - 2.0f * panelFitMargin) / (extent.top - extent.bottom));
+
+    // Where the sphere's centre sits when the shape touches the top of the
+    // space, and the bottom; halfway between centres the shape we actually see.
+    const float highest = panelFitMargin + extent.top * fittedRadius;
+    const float lowest = room - panelFitMargin + extent.bottom * fittedRadius;
+    const float centre = std::min (std::max ((highest + lowest) / 2.0f + panY, highest), lowest);
     return { fittedRadius / radius, centre - (height / 2.0f + panY) };
 }
 
@@ -277,7 +284,7 @@ bool knobEnabled (const Band& b, int knob)
 bool knobIsStepped (const Band& b, int knob)    { return knob == qKnob && b.isCut(); }
 
 void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, float amount,
-                    const Band* band, PanelTarget hover, int activeKnob)
+                    const Band* band, bool soloed, PanelTarget hover, int activeKnob)
 {
     using Kind = PanelTarget::Kind;
 
@@ -341,6 +348,9 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
 
             buttonBack (l.stereo, band->stereo, hover.kind == Kind::stereo);
             text (band->stereo ? "Stereo" : "Mono", l.stereo, 11.0f, faded (band->stereo || hover.kind == Kind::stereo ? bright : idle));
+
+            buttonBack (l.solo, soloed, hover.kind == Kind::solo);
+            text ("S", l.solo, 11.0f, faded (soloed || hover.kind == Kind::solo ? bright : idle));
 
             // Mute: a circle with a slash, like a muted node.
             {

@@ -289,12 +289,82 @@ class BandStage {
   }
 }
 
-// The EQ itself: input -> band stages in series -> output, with a bypass.
+// Solo: what one band works on, taken from the EQ's input. As in SphereEq.h: a
+// band-pass at its frequency and Q (a shelf or cut: what it moves or removes),
+// on its axis only, or on L and R alike for a stereo band.
+class SoloStage {
+  readonly input: GainNode;
+  readonly output: GainNode;
+  private readonly axes: { projL: GainNode; projR: GainNode; backL: GainNode; backR: GainNode; filter: BiquadFilterNode }[];
+  private active = false;
+
+  constructor(private readonly ctx: BaseAudioContext) {
+    this.input = stereoGain(ctx);
+    this.output = stereoGain(ctx);
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    this.input.connect(splitter);
+    merger.connect(this.output);
+
+    // Two axes because a stereo band needs L and R filtered separately; a
+    // mono band uses the first and silences the second.
+    this.axes = [0, 1].map(() => {
+      const axis = {
+        projL: monoGain(ctx, 0), projR: monoGain(ctx, 0), backL: monoGain(ctx, 0), backR: monoGain(ctx, 0),
+        filter: new BiquadFilterNode(ctx, { type: "bandpass", channelCount: 1, channelCountMode: "explicit" }),
+      };
+      splitter.connect(axis.projL, 0);
+      splitter.connect(axis.projR, 1);
+      axis.projL.connect(axis.filter);
+      axis.projR.connect(axis.filter);
+      axis.filter.connect(axis.backL);
+      axis.filter.connect(axis.backR);
+      axis.backL.connect(merger, 0, 0);
+      axis.backR.connect(merger, 0, 1);
+      return axis;
+    });
+  }
+
+  // null keeps the last settings, for the fade back to the EQ.
+  set(band: Band | null) {
+    if (!band) {
+      this.active = false;
+      return;
+    }
+
+    const t = this.ctx.currentTime;
+    const immediate = !this.active;
+    const apply = (param: AudioParam, value: number) =>
+      immediate ? param.setValueAtTime(value, t) : param.setTargetAtTime(value, t, SMOOTHING);
+    const low = band.type === "lowshelf" || band.type === "lowcut";
+    const pass = isShelf(band) || isCut(band);
+    const freq = latToFreq(band.lat);
+
+    this.axes.forEach((a, i) => {
+      const [uL, uR] = band.stereo ? (i === 0 ? [1, 0] : [0, 1]) : i === 0 ? stereoAxis(band.lon) : [0, 0];
+      apply(a.projL.gain, uL);
+      apply(a.projR.gain, uR);
+      apply(a.backL.gain, uL);
+      apply(a.backR.gain, uR);
+      a.filter.type = !pass ? "bandpass" : low ? "lowpass" : "highpass";
+      apply(a.filter.frequency, freq);
+      apply(a.filter.Q, pass ? -3.01 : band.q); // low/high-pass Q is in dB: Butterworth
+    });
+
+    this.active = true;
+  }
+}
+
+// The EQ itself: input -> band stages in series -> output, with a bypass and a solo.
 export class EqChain {
   readonly input: GainNode;
   readonly output: GainNode;
   private readonly wet: GainNode;
   private readonly dry: GainNode;
+  private readonly solo: SoloStage;
+  private readonly soloLevel: GainNode;
+  private bypassed = false;
+  private soloing = false;
   private stages: BandStage[] = [];
   private bandIds: number[] = [];
 
@@ -306,10 +376,19 @@ export class EqChain {
     this.input.connect(this.dry);
     this.dry.connect(this.output);
     this.wet.connect(this.output);
+    this.solo = new SoloStage(ctx);
+    this.soloLevel = stereoGain(ctx, 0);
+    this.solo.output.connect(this.soloLevel);
+    this.soloLevel.connect(this.output);
     this.rewire();
   }
 
   setBands(requested: Band[]) {
+    const soloed = requested.find((b) => b.soloed) ?? null;
+    this.solo.set(soloed);
+    this.soloing = soloed !== null;
+    this.updateMix();
+
     // A stereo band is two stages in series, one on the L axis and one on the
     // R axis: the same filter on each channel.
     const bands: Band[] = [];
@@ -347,14 +426,21 @@ export class EqChain {
   }
 
   setBypassed(bypassed: boolean) {
+    this.bypassed = bypassed;
+    this.updateMix();
+  }
+
+  private updateMix() {
     const t = this.ctx.currentTime;
-    this.wet.gain.setTargetAtTime(bypassed ? 0 : 1, t, SMOOTHING);
-    this.dry.gain.setTargetAtTime(bypassed ? 1 : 0, t, SMOOTHING);
+    this.wet.gain.setTargetAtTime(this.bypassed || this.soloing ? 0 : 1, t, SMOOTHING);
+    this.dry.gain.setTargetAtTime(this.bypassed ? 1 : 0, t, SMOOTHING);
+    this.soloLevel.gain.setTargetAtTime(!this.bypassed && this.soloing ? 1 : 0, t, SMOOTHING);
   }
 
   private rewire() {
     this.input.disconnect();
     this.input.connect(this.dry);
+    this.input.connect(this.solo.input);
     let node: AudioNode = this.input;
     for (const s of this.stages) {
       node.connect(s.input);
