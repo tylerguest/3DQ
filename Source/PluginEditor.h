@@ -33,6 +33,17 @@ private:
     // processor -> sphere
     sphere::BandSet getBandsFromProcessor() const;
 
+    void handlePresetCommand (sphere::PresetCommand, int preset);
+    void bandsEditedOnSphere (const sphere::BandSet& bands);
+    void showPresetBankBands();  // after the bank's current setup changed
+    void updatePresetBar();
+    juce::String sessionPresetName() const;
+    void askToSaveAs();
+    void saveUnderName (const juce::String& name);
+    void showPresetDialog (const juce::String& title, const juce::String& message, const juce::String& initialText,
+                           const juce::String& confirmLabel, std::function<void (const juce::String&)> onConfirm);
+    void showPresetError (const juce::String& message);
+
     // Runs on the sphere's render thread.
     void readLiveAudio (SphereView::LiveAudio& live);
 
@@ -52,6 +63,14 @@ private:
     StereoSpectrum spectrum;
     std::vector<float> recentLeft  = std::vector<float> ((size_t) StereoSpectrum::fftSize);
     std::vector<float> recentRight = std::vector<float> ((size_t) StereoSpectrum::fftSize);
+
+    struct DialogLook : juce::LookAndFeel_V4
+    {
+        DialogLook();
+    };
+
+    DialogLook dialogLook;
+    std::unique_ptr<juce::AlertWindow> presetDialog; // after dialogLook, which it uses
 
     // Last, so its render thread stops before anything it reads is destroyed.
     SphereView sphereView;

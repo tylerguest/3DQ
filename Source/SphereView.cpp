@@ -123,6 +123,23 @@ void SphereView::setBands (const BandSet& bands)
     publishSolo();
 }
 
+void SphereView::showNewBands (const BandSet& bands)
+{
+    setBands (bands);
+
+    const std::lock_guard lock (stateLock);
+    state.recentreRest = restCentreLocked();
+    state.easingRestCentre = true;
+}
+
+void SphereView::setPresetInfo (PresetBarInfo info)
+{
+    auto shared = std::make_shared<const PresetBarInfo> (std::move (info));
+
+    const std::lock_guard lock (stateLock);
+    state.presetInfo = std::move (shared);
+}
+
 void SphereView::notifyBandsEdited (const BandSet& bands)
 {
     if (onBandsEdited != nullptr)
@@ -290,12 +307,21 @@ PanelTarget SphereView::panelTargetLocked (juce::Point<float> position) const
     return layout.hit (position, state.panelOpen, state.bands.find (state.selected) != nullptr);
 }
 
+PresetBarLayout SphereView::presetLayoutLocked() const
+{
+    return PresetBarLayout::make ((float) getWidth(), (float) getHeight(), state.presetInfo->presets.size(), state.presetMenuScroll);
+}
+
 void SphereView::updateCursorLocked()
 {
     using Kind = PanelTarget::Kind;
 
     if (knobDrag.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    else if (state.presetHover.kind == PresetTarget::Kind::menuBackground)
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+    else if (state.presetHover.kind != PresetTarget::Kind::none)
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
     else if (state.panelHover.kind == Kind::knob || state.panelHover.kind == Kind::background)
         setMouseCursor (juce::MouseCursor::NormalCursor);
     else if (state.panelHover.kind != Kind::none)
@@ -324,10 +350,114 @@ void SphereView::mouseExit (const juce::MouseEvent&)
     state.pointerInside = false;
     state.helpHovered = false;
     state.panelHover = {};
+    state.presetHover = {};
     state.lastInteraction = nowSeconds();
 
     if (state.dragged < 0)
         state.hovered = -1;
+}
+
+bool SphereView::presetMouseDown (const juce::MouseEvent& e)
+{
+    using Kind = PresetTarget::Kind;
+
+    std::optional<std::pair<PresetCommand, int>> command;
+
+    {
+        const std::lock_guard lock (stateLock);
+        const auto target = presetLayoutLocked().hit (e.position, state.presetMenuOpen);
+
+        // A click away from an open menu only closes it.
+        if (target.kind == Kind::none)
+        {
+            const bool wasOpen = state.presetMenuOpen;
+            state.presetMenuOpen = false;
+            return wasOpen;
+        }
+
+        state.lastInteraction = nowSeconds();
+
+        if (! e.mods.isLeftButtonDown())
+            return true;
+
+        const auto& info = *state.presetInfo;
+
+        switch (target.kind)
+        {
+            case Kind::undo:      if (info.canUndo) command = { PresetCommand::undo, 0 }; break;
+            case Kind::redo:      if (info.canRedo) command = { PresetCommand::redo, 0 }; break;
+            case Kind::ab:        command = { PresetCommand::toggleAB, 0 }; break;
+            case Kind::copy:      command = { PresetCommand::copyAB, 0 }; break;
+            case Kind::previous:  command = { PresetCommand::previous, 0 }; break;
+            case Kind::next:      command = { PresetCommand::next, 0 }; break;
+            case Kind::name:
+                state.presetMenuOpen = ! state.presetMenuOpen;
+                if (state.presetMenuOpen)
+                {
+                    state.presetMenuScroll = std::max (0, info.current - 5);
+                    command = { PresetCommand::refresh, 0 };
+                }
+                break;
+            case Kind::save:      if (info.canSave) command = { PresetCommand::save, 0 }; break;
+            case Kind::saveAs:    command = { PresetCommand::saveAs, 0 }; break;
+            case Kind::item:      command = { PresetCommand::load, target.index }; break;
+            case Kind::remove:    command = { PresetCommand::remove, target.index }; break;
+            case Kind::menuBackground:
+            case Kind::none:
+                break;
+        }
+
+        if (target.kind == Kind::save || target.kind == Kind::saveAs || target.kind == Kind::item)
+            state.presetMenuOpen = false;
+    }
+
+    if (command.has_value() && onPresetCommand != nullptr)
+        onPresetCommand (command->first, command->second);
+
+    return true;
+}
+
+bool SphereView::presetPointerMoved (const juce::MouseEvent& e)
+{
+    const std::lock_guard lock (stateLock);
+
+    if (knobDrag.has_value() || pressed.has_value() || gainDrag.has_value() || panPosition.has_value() || state.rotating || state.dragged >= 0)
+    {
+        state.presetHover = {};
+        return false;
+    }
+
+    state.presetHover = presetLayoutLocked().hit (e.position, state.presetMenuOpen);
+
+    if (state.presetHover.kind == PresetTarget::Kind::none)
+        return false;
+
+    state.pointerInside = true;
+    state.lastInteraction = nowSeconds();
+    state.helpHovered = false;
+    state.panelHover = {};
+    state.hovered = -1;
+    updateCursorLocked();
+    return true;
+}
+
+bool SphereView::presetWheel (const juce::MouseEvent& e, float delta)
+{
+    const std::lock_guard lock (stateLock);
+    auto layout = presetLayoutLocked();
+    const auto target = layout.hit (e.position, state.presetMenuOpen);
+
+    if (target.kind == PresetTarget::Kind::none)
+        return false;
+
+    if (state.presetMenuOpen && layout.menu.contains (e.position / layout.scale))
+    {
+        const int steps = delta > 0.0f ? 1 : -1;
+        state.presetMenuScroll = std::clamp (layout.firstVisible + steps, 0, std::max (0, layout.presetCount - layout.visibleRows));
+        state.presetHover = presetLayoutLocked().hit (e.position, true);
+    }
+
+    return true;
 }
 
 bool SphereView::panelMouseDown (const juce::MouseEvent& e)
@@ -513,7 +643,9 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
 
 void SphereView::mouseDown (const juce::MouseEvent& e)
 {
-    if (overHelpButton (e.position) || panelMouseDown (e))
+    presetTookPress = presetMouseDown (e);
+
+    if (presetTookPress || overHelpButton (e.position) || panelMouseDown (e))
         return;
 
     BandSet edited;
@@ -606,7 +738,7 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
 
 void SphereView::pointerMoved (const juce::MouseEvent& e)
 {
-    if (panelPointerMoved (e))
+    if (presetPointerMoved (e) || panelPointerMoved (e))
         return;
 
     BandSet edited;
@@ -746,13 +878,15 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
     state.lastInteraction = now;
     state.helpHovered = overHelpButton (e.position);
     state.panelHover = panelTargetLocked (e.position);
-    state.hovered = state.helpHovered || state.panelHover.kind != PanelTarget::Kind::none ? -1 : hitBand (toDevice (e.position), cameraLocked());
+    state.presetHover = presetLayoutLocked().hit (e.position, state.presetMenuOpen);
+    state.hovered = state.helpHovered || state.panelHover.kind != PanelTarget::Kind::none || state.presetHover.kind != PresetTarget::Kind::none
+                        ? -1 : hitBand (toDevice (e.position), cameraLocked());
     updateCursorLocked();
 }
 
 void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    if (e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown() || overHelpButton (e.position) || panelDoubleClick (e))
+    if (presetTookPress || e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown() || overHelpButton (e.position) || panelDoubleClick (e))
         return;
 
     BandSet edited;
@@ -838,7 +972,7 @@ void SphereView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
 
     const float delta = wheel.isSmooth ? -raw * 512.0f : (raw > 0.0f ? -100.0f : 100.0f);
 
-    if (panelWheel (e, delta))
+    if (presetWheel (e, delta) || panelWheel (e, delta))
         return;
 
     BandSet edited;
@@ -953,6 +1087,10 @@ void SphereView::renderOpenGL()
     bool helpHovered, panelOpen;
     float panelAmount;
     PanelTarget panelHover;
+    PresetTarget presetHover;
+    std::shared_ptr<const PresetBarInfo> presetInfo;
+    bool presetMenuOpen;
+    PresetBarLayout presetLayout;
 
     {
         const std::lock_guard lock (stateLock);
@@ -1004,6 +1142,17 @@ void SphereView::renderOpenGL()
             }
         }
 
+        if (state.easingRestCentre && ! state.recentring)
+        {
+            state.restCentre = state.recentreRest + (state.restCentre - state.recentreRest) * std::exp (-dt / 0.12f);
+
+            if (std::abs (state.restCentre - state.recentreRest) < 0.002f)
+            {
+                state.restCentre = state.recentreRest;
+                state.easingRestCentre = false;
+            }
+        }
+
         state.yaw = std::remainder (state.yaw, twoPi);
 
         bands = state.bands;
@@ -1026,6 +1175,10 @@ void SphereView::renderOpenGL()
             state.panelAmount = panelGoal;
 
         panelAmount = state.panelAmount;
+        presetHover = state.presetHover;
+        presetInfo = state.presetInfo;
+        presetMenuOpen = state.presetMenuOpen;
+        presetLayout = PresetBarLayout::make (componentWidth.load(), componentHeight.load(), presetInfo->presets.size(), state.presetMenuScroll);
         camera = makeCameraLocked ((float) width, (float) height, dpr);
     }
 
@@ -1065,6 +1218,8 @@ void SphereView::renderOpenGL()
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount), dpr, panelAmount,
                        bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob);
         drawHelp (g, camera, helpHovered, dt);
+        presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));
+        drawPresetBar (g, presetLayout, dpr, *presetInfo, presetHover, presetMenuAmount);
     }
 
     if (logStats)
@@ -1336,7 +1491,7 @@ void SphereView::drawTitle (juce::Graphics& g, int soloed)
         g.setFont (uiFont (12.0f * dpr));
         g.setColour (textColour.withAlpha (0.85f));
         g.drawSingleLineText ("Solo  " + juce::String::charToString ((juce::juce_wchar) 0xb7) + "  Band " + juce::String (soloed + 1),
-                              x + juce::roundToInt (juce::GlyphArrangement::getStringWidth (title, "3DQ") + 14.0f * dpr), baseline);
+                              x, baseline + juce::roundToInt (18.0f * dpr));
     }
 }
 

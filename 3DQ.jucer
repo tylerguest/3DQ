@@ -24,6 +24,10 @@
       <FILE id="sphUiH" name="SphereUi.h" compile="0" resource="0" file="Source/SphereUi.h"/>
       <FILE id="bndPnH" name="BandPanel.h" compile="0" resource="0" file="Source/BandPanel.h"/>
       <FILE id="bndPnC" name="BandPanel.cpp" compile="1" resource="0" file="Source/BandPanel.cpp"/>
+      <FILE id="prsBrH" name="PresetBar.h" compile="0" resource="0" file="Source/PresetBar.h"/>
+      <FILE id="prsBrC" name="PresetBar.cpp" compile="1" resource="0" file="Source/PresetBar.cpp"/>
+      <FILE id="prsBkH" name="PresetBank.h" compile="0" resource="0" file="Source/PresetBank.h"/>
+      <FILE id="prsBkC" name="PresetBank.cpp" compile="1" resource="0" file="Source/PresetBank.cpp"/>
       <FILE id="hstWnH" name="HostWindow.h" compile="0" resource="0" file="Source/HostWindow.h"/>
       <FILE id="hstWnC" name="HostWindow.cpp" compile="1" resource="0" file="Source/HostWindow.cpp"/>
       <FILE id="sphVwH" name="SphereView.h" compile="0" resource="0" file="Source/SphereView.h"/>

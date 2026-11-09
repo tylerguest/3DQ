@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import { NUM_SPECTRUM_BANDS, SPECTRUM_RANGE_DB, Spectrum, emptySpectrum, powerToLevel } from "./spectrum";
 import type { BandDynamics } from "./pluginBridge";
+import { PresetBank, isReservedPresetName, legalPresetName } from "./presets";
+import { PresetBarLayout, PresetTarget, drawPresetBar, hitPresetBar, makePresetBarLayout, presetMenuContains } from "./presetBar";
+import { closePresetDialog, showPresetDialog } from "./presetDialog";
 import { BandPanelLayout, PanelTarget, PanelViewFit, SurfaceExtent, drawBandPanel, fitViewAbovePanel, hitBandPanel, panelScale, knobEnabled, knobIsStepped, knobPosition, makeBandPanelLayout, resetKnob, setBandType, setKnobPosition } from "./bandPanel";
 import { BackdropLayer } from "./backdrop";
 import { CanvasSpriteSink, GlSpriteSink, SpriteProfile, SpriteSink, SpriteStyle } from "./sprites";
@@ -507,9 +510,20 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     let lastWheelTime = 0;
     let slopeAccumulator = 0; // wheel delta toward the next cut-slope step
     let liveDynamics: Map<number, BandDynamics> | null = null;
-    const notify = () => {
+    const sendBandsOut = () => {
       const soloed = soloedBand();
       onBandsChangeRef.current?.(bands.map((b) => ({ ...b, soloed: b === soloed })));
+    };
+    const presetBank = new PresetBank();
+    let presetInfo = presetBank.info();
+    let presetHover: PresetTarget | null = null;
+    let presetMenuOpen = false, presetMenuScroll = 0, presetMenuAmount = 0;
+    let presetTookPress = false; // so the second click of a double-click there can't reach the sphere
+    let easingRestCentre = false;
+    const notify = () => {
+      presetBank.edited(bands);
+      presetInfo = presetBank.info();
+      sendBandsOut();
     };
 
     // View state: yaw spins around the vertical axis, pitch tilts toward the viewer.
@@ -720,16 +734,101 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const rect = canvas.getBoundingClientRect();
       return hitBandPanel(panelLayout(panelOpen ? 1 : 0), e.clientX - rect.left, e.clientY - rect.top, panelOpen, !!selectedBand && bands.indexOf(selectedBand) >= 0);
     };
+    const presetLayout = (): PresetBarLayout => makePresetBarLayout(canvas.clientWidth, canvas.clientHeight, presetInfo.presets.length, presetMenuScroll);
+    const presetTarget = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      return hitPresetBar(presetLayout(), e.clientX - rect.left, e.clientY - rect.top, presetMenuOpen);
+    };
+
+    // After the bank's current setup changed: the view eases over to centre the new shape.
+    const showBankBands = () => {
+      replaceBandsRef.current(presetBank.bands());
+      presetInfo = presetBank.info();
+      recentreRest = restCentreOfShape();
+      easingRestCentre = true;
+      sendBandsOut();
+    };
+    const presetError = (message: string) => showPresetDialog({ title: "3DQ", message, confirmLabel: "OK", onConfirm: () => {} });
+    const loadedPreset = (ok: boolean) => {
+      if (ok) showBankBands();
+      else presetError("That preset couldn't be read.");
+    };
+    const saveUnderName = (name: string) => {
+      if (!presetBank.saveAs(name)) presetError("That preset couldn't be saved.");
+      presetInfo = presetBank.info();
+    };
+    const askToSaveAs = () => {
+      const current = presetBank.name();
+      showPresetDialog({
+        title: "Save preset",
+        initialText: isReservedPresetName(current) ? "New preset" : current,
+        confirmLabel: "Save",
+        onConfirm: (entered) => {
+          const name = legalPresetName(entered);
+          if (!name) return;
+          if (isReservedPresetName(name)) presetError(`"${name}" is the built-in preset. Choose another name.`);
+          else if (presetBank.exists(name)) showPresetDialog({ title: "Replace preset?", message: `"${name}" already exists.`, confirmLabel: "Replace", onConfirm: () => saveUnderName(name) });
+          else saveUnderName(name);
+        },
+      });
+    };
+
+    // Returns true when the bar or its menu took the press.
+    const presetPress = (e: PointerEvent) => {
+      const target = presetTarget(e);
+      if (!target) {
+        const wasOpen = presetMenuOpen;
+        presetMenuOpen = false;
+        return wasOpen;
+      }
+      touch();
+      if (e.button !== 0) return true;
+      const info = presetInfo;
+      switch (target.kind) {
+        case "undo": if (info.canUndo && presetBank.undo()) showBankBands(); break;
+        case "redo": if (info.canRedo && presetBank.redo()) showBankBands(); break;
+        case "ab": presetBank.toggleAB(); showBankBands(); break;
+        case "copy": presetBank.copyToOtherSlot(); presetInfo = presetBank.info(); break;
+        case "previous": loadedPreset(presetBank.step(-1)); break;
+        case "next": loadedPreset(presetBank.step(1)); break;
+        case "name":
+          presetMenuOpen = !presetMenuOpen;
+          if (presetMenuOpen) {
+            presetMenuScroll = Math.max(0, info.current - 5);
+            presetBank.rescan();
+            presetInfo = presetBank.info();
+          }
+          break;
+        case "save":
+          if (info.canSave) {
+            if (!presetBank.save()) presetError("That preset couldn't be saved.");
+            presetInfo = presetBank.info();
+            presetMenuOpen = false;
+          }
+          break;
+        case "saveAs": presetMenuOpen = false; askToSaveAs(); break;
+        case "item": presetMenuOpen = false; loadedPreset(presetBank.load(target.index)); break;
+        case "remove":
+          if (!presetBank.remove(target.index)) presetError("That preset couldn't be removed.");
+          presetInfo = presetBank.info();
+          break;
+        default: break;
+      }
+      return true;
+    };
+
     const panelKnobCursor = () => (panelHover?.kind === "knob" || panelHover?.kind === "background" ? "default" : "pointer");
 
     const updateCursor = () => {
       if (knobDrag) { canvas.style.cursor = "ns-resize"; return; }
+      if (presetHover) { canvas.style.cursor = presetHover.kind === "menuBackground" ? "default" : "pointer"; return; }
       if (panelHover) { canvas.style.cursor = panelKnobCursor(); return; }
       canvas.style.cursor = helpHovered ? "default" : gainDrag ? "ns-resize" : draggedBand || rotating || panDrag ? "grabbing" : hoveredBand ? "pointer" : "grab";
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (overHelpButton(e)) return;
+      presetTookPress = presetPress(e);
+      if (presetTookPress || overHelpButton(e)) return;
       touch();
       recentring = false;
       const target = panelTarget(e);
@@ -816,6 +915,14 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
           setKnobPosition(selectedBand, knobDrag.knob, knobDrag.position);
           notify();
         }
+        return;
+      }
+      presetHover = pressed || gainDrag || panDrag || rotating || draggedBand ? null : presetTarget(e);
+      if (presetHover) {
+        panelHover = null;
+        helpHovered = false;
+        hoveredBand = null;
+        updateCursor();
         return;
       }
       panelHover = pressed || gainDrag || panDrag || rotating || draggedBand ? null : panelTarget(e);
@@ -905,10 +1012,11 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       pressed = null;
       touch();
       panelHover = panelTarget(e);
+      presetHover = presetTarget(e);
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       const [px, py] = eventPos(e);
       helpHovered = overHelpButton(e);
-      hoveredBand = helpHovered || panelHover ? null : hitBand(px, py);
+      hoveredBand = helpHovered || panelHover || presetHover ? null : hitBand(px, py);
       updateCursor();
     };
 
@@ -916,6 +1024,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       pointerInside = false;
       helpHovered = false;
       panelHover = null;
+      presetHover = null;
       touch();
       if (!draggedBand) hoveredBand = null;
     };
@@ -924,7 +1033,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     // but flattens out and stops affecting the sound.
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault();
-      if (overHelpButton(e)) return;
+      if (presetTookPress || overHelpButton(e)) return;
       touch();
       if (e.ctrlKey) return; // macOS reports Ctrl+click as a right-click; that's the gain drag
       if (panelTarget(e)) return;
@@ -938,7 +1047,7 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     };
 
     const onDoubleClick = (e: MouseEvent) => {
-      if (overHelpButton(e)) return;
+      if (presetTookPress || overHelpButton(e)) return;
       touch();
       const target = panelTarget(e);
       if (target) {
@@ -994,6 +1103,14 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (overHelpButton(e)) return;
+      if (presetTarget(e)) {
+        const layout = presetLayout(), rect = canvas.getBoundingClientRect();
+        if (presetMenuOpen && presetMenuContains(layout, e.clientX - rect.left, e.clientY - rect.top)) {
+          presetMenuScroll = clamp(layout.firstVisible + (e.deltaY > 0 ? 1 : -1), 0, Math.max(0, layout.presetCount - layout.visibleRows));
+          presetHover = presetTarget(e);
+        }
+        return;
+      }
       touch();
       // Some platforms turn shift+wheel into horizontal scrolling. Firefox can
       // report lines or pages instead of pixels; normalise to pixels (~100
@@ -1599,6 +1716,14 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
       const panelGoal = panelOpen ? 1 : 0;
       panelAmount += (panelGoal - panelAmount) * (1 - Math.exp(-dt / 0.08));
       if (Math.abs(panelGoal - panelAmount) < 0.002) panelAmount = panelGoal;
+      if (easingRestCentre && !recentring) {
+        restCentre = recentreRest + (restCentre - recentreRest) * Math.exp(-dt / 0.12);
+        if (Math.abs(restCentre - recentreRest) < 0.002) {
+          restCentre = recentreRest;
+          easingRestCentre = false;
+        }
+      }
+
       if (recentring) {
         const keep = Math.exp(-dt / 0.09);
         view.panX *= keep;
@@ -1805,10 +1930,13 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
         ctx.font = `${12 * dpr}px ${UI_FONT}`;
         ctx.fillStyle = "rgba(232,228,218,0.85)";
         ctx.textBaseline = "alphabetic";
-        ctx.fillText(`Solo  ·  Band ${soloed.id + 1}`, 72 * dpr, 30 * dpr);
+        ctx.fillText(`Solo  ·  Band ${soloed.id + 1}`, 20 * dpr, 54 * dpr);
         ctx.restore();
       }
       drawHelp(dt);
+      presetMenuAmount += ((presetMenuOpen ? 1 : 0) - presetMenuAmount) * (1 - Math.exp(-dt / 0.06));
+      document.body.classList.toggle("preset-menu-open", presetMenuOpen);
+      drawPresetBar(ctx, presetLayout(), dpr, presetInfo, presetHover, presetMenuAmount);
 
       ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
@@ -1817,6 +1945,8 @@ export default function Sphere({ onBandsChange, externalBands, getSpectrum, getD
     render();
 
     return () => {
+      closePresetDialog();
+      document.body.classList.remove("preset-menu-open");
       cancelAnimationFrame(frame);
       observer.disconnect();
       glSink?.dispose();

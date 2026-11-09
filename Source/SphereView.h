@@ -23,6 +23,7 @@
 
     Hovering the ? button in the bottom-right corner lists these. The ^ button
     at the bottom centre slides up a panel of controls for the selected band.
+    Along the top are the preset menu, undo and A/B.
 
     Threads: mouse events arrive on the message thread and rendering runs on
     OpenGL's own thread, so a busy host UI can't slow the sphere. `state` is
@@ -38,6 +39,7 @@
 #include "SphereField.h"
 #include "SpriteRenderer.h"
 #include "BandPanel.h"
+#include "PresetBar.h"
 
 class SphereView  : public juce::Component,
                     private juce::OpenGLRenderer
@@ -57,9 +59,16 @@ public:
     std::function<void (const sphere::BandSet&)> onBandsEdited; // message thread
     std::function<void (LiveAudio&)> readLiveAudio;             // render thread
     std::function<void (int band)> onSoloChanged;               // message thread; -1 = none
+    std::function<void (sphere::PresetCommand, int preset)> onPresetCommand; // message thread
 
     // Bands pushed from outside (host automation, preset load). Ignored during a drag.
     void setBands (const sphere::BandSet& bands);
+
+    // The same, for a new EQ as a whole (preset, undo, A/B): the view eases over
+    // to centre the new shape.
+    void showNewBands (const sphere::BandSet& bands);
+
+    void setPresetInfo (sphere::PresetBarInfo);
 
     void resized() override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -108,9 +117,13 @@ private:
         // Panel closed: how far below the window's centre the sphere's centre sits,
         // in sphere radii, so the EQ'd shape is what looks centred.
         float restCentre = 0, recentreRest = 0;
-        bool restCentrePlaced = false;
+        bool restCentrePlaced = false, easingRestCentre = false;
         bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
         sphere::PanelTarget panelHover;
+        sphere::PresetTarget presetHover;
+        std::shared_ptr<const sphere::PresetBarInfo> presetInfo = std::make_shared<sphere::PresetBarInfo>();
+        bool presetMenuOpen = false;
+        int presetMenuScroll = 0;
         int selected = -1; // the band last clicked: highlighted, and what the panel controls
         int soloLatched = -1, soloHeld = -1; // from the panel's S button, and Alt+hold on a node
         float panelAmount = 0; // eased 0..1, as the panel slides
@@ -138,9 +151,15 @@ private:
     void validateSelectionLocked();
     void selectNeighbourLocked (int direction);
     sphere::PanelTarget panelTargetLocked (juce::Point<float> position) const;
+    sphere::PresetBarLayout presetLayoutLocked() const;
     bool overHelpButton (juce::Point<float> position) const;
 
     void pointerMoved (const juce::MouseEvent&);
+
+    // Each returns true when the preset bar or its menu took the event.
+    bool presetMouseDown (const juce::MouseEvent&);
+    bool presetPointerMoved (const juce::MouseEvent&);
+    bool presetWheel (const juce::MouseEvent&, float delta);
 
     // Each returns true when the panel took the event.
     bool panelMouseDown (const juce::MouseEvent&);
@@ -168,7 +187,7 @@ private:
     double lastFrameTime = 0;
     float autoBlend = 0;
     std::optional<sphere::SurfaceExtent> shownExtent; // eased, as the surface's springs ease
-    float helpAmount = 0;
+    float helpAmount = 0, presetMenuAmount = 0;
     std::array<float, sphere::maxBands> nodeEmphasis {};
     float dpr = 1;
     double statsStart = 0, statsCpu = 0;
@@ -191,6 +210,7 @@ private:
     double lastWheelTime = 0;
     float slopeAccumulator = 0;
     int publishedSolo = -1;
+    bool presetTookPress = false; // so the second click of a double-click there can't reach the sphere
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SphereView)
 };

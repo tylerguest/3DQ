@@ -10,6 +10,7 @@
 
 #include <JuceHeader.h>
 #include "SphereEq.h"
+#include "PresetBank.h"
 
 //==============================================================================
 /**
@@ -77,6 +78,10 @@ public:
     float getLiveLevelDb (int slot) const { return eq.getCurrentLevelDb (slot); }
 
     juce::AudioProcessorValueTreeState state;
+
+    // The preset menu, A/B and undo; message thread only. The preset's name is
+    // kept with the session in state's "presetName" property.
+    sphere::PresetBank presets;
 
     //==============================================================================
     // Recent output audio for the GUI's analyser. The audio thread writes into a
