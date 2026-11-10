@@ -285,20 +285,20 @@ void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
 {
     static const juce::Path logo = makeLogo();
 
-    // Capitals 12 points tall, centred on the preset bar; it grows with the
-    // window like the buttons.
+    // Capitals 12 points tall, centred on the preset bar. Size and inset grow
+    // with the window like the buttons, so it stays level with the tools on the right.
     const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
-    const float height = 12.0f * unit, left = 21.0f * dpr, top = 26.0f * unit - height / 2.0f;
+    const float height = 12.0f * unit, left = 21.0f * unit, top = 26.0f * unit - height / 2.0f;
 
     g.setColour (juce::Colours::white);
     g.fillPath (logo, juce::AffineTransform::scale (height).translated (left, top));
 
-    const int x = juce::roundToInt (left), baseline = juce::roundToInt (top + height + 18.0f * dpr);
+    const int x = juce::roundToInt (left), baseline = juce::roundToInt (top + height + 18.0f * unit);
 
     // Solo changes what you hear, so it stays on show with the panel closed.
     if (soloed >= 0)
     {
-        g.setFont (uiFont (12.0f * dpr));
+        g.setFont (uiFont (12.0f * unit));
         g.setColour (textColour.withAlpha (0.85f));
         g.drawSingleLineText ("Solo  " + juce::String::charToString ((juce::juce_wchar) 0xb7) + "  Band " + juce::String (soloed + 1),
                               x, baseline);
@@ -320,7 +320,7 @@ void SphereView::drawMakerMark (juce::Graphics& g, const Camera& camera, float p
     g.setColour (warmGrey.withAlpha (alpha));
 
     const float centreY = camera.height - helpButtonInset * unit;
-    g.drawSingleLineText ("4KDSP", juce::roundToInt (21.0f * dpr), juce::roundToInt (centreY + font.getAscent() * 0.38f));
+    g.drawSingleLineText ("4KDSP", juce::roundToInt (21.0f * unit), juce::roundToInt (centreY + font.getAscent() * 0.38f));
 }
 
 // The ? button, and the list of controls that appears while hovering over it.
