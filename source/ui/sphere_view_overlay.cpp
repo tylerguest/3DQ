@@ -8,11 +8,41 @@
 */
 
 #include "sphere_view_detail.h"
+#include "orbitron_font.h"
 
 namespace threedq
 {
 
 using namespace view;
+
+namespace
+{
+// The 3DQ wordmark: "3DQ" in Orbitron Black, as an outline one unit high from
+// the top of the capitals to the baseline, starting at x = 0.
+juce::Path makeLogo()
+{
+    const auto typeface = juce::Typeface::createSystemTypefaceFor (fonts::orbitron, fonts::orbitronSize);
+    const juce::FontVariableSetting black ("wght", 900.0f);
+    const auto heavy = typeface != nullptr ? typeface->cloneWithVariableSettings ({ &black, 1 }) : nullptr;
+    const auto font = juce::Font (juce::FontOptions{}.withTypeface (heavy != nullptr ? heavy : typeface).withHeight (100.0f));
+
+    auto outline = [&] (const juce::String& text)
+    {
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (font, text, 0.0f, 0.0f);
+        juce::Path p;
+        glyphs.createPath (p);
+        return p;
+    };
+
+    // The D has no overshoot or tail, so it gives the capital height exactly.
+    const auto caps = outline ("D").getBounds();
+    auto logo = outline ("3DQ");
+    const auto bounds = logo.getBounds();
+    logo.applyTransform (juce::AffineTransform::translation (-bounds.getX(), -caps.getY()).scaled (1.0f / caps.getHeight()));
+    return logo;
+}
+}
 
 //==============================================================================
 void SphereView::drawOverlay (juce::Graphics& g, const BandSet& bands, const Camera& camera, int hovered, int dragged, int selected, float dt)
@@ -251,15 +281,19 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
         g.drawSingleLineText (lines[i], juce::roundToInt (x + padding), juce::roundToInt (y + padding + (float) i * lineHeight + font.getAscent()));
 }
 
-void SphereView::drawTitle (juce::Graphics& g, int soloed)
+void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
 {
-    auto title = uiFont (22.0f * dpr, true);
-    title.setExtraKerningFactor (0.09f);
+    static const juce::Path logo = makeLogo();
 
-    g.setFont (title);
-    g.setColour (textColour);
-    const int x = juce::roundToInt (20.0f * dpr), baseline = juce::roundToInt (16.0f * dpr + title.getAscent());
-    g.drawSingleLineText ("3DQ", x, baseline);
+    // Capitals 12 points tall, centred on the preset bar; it grows with the
+    // window like the buttons.
+    const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
+    const float height = 12.0f * unit, left = 21.0f * dpr, top = 26.0f * unit - height / 2.0f;
+
+    g.setColour (juce::Colours::white);
+    g.fillPath (logo, juce::AffineTransform::scale (height).translated (left, top));
+
+    const int x = juce::roundToInt (left), baseline = juce::roundToInt (top + height + 18.0f * dpr);
 
     // Solo changes what you hear, so it stays on show with the panel closed.
     if (soloed >= 0)
@@ -267,8 +301,26 @@ void SphereView::drawTitle (juce::Graphics& g, int soloed)
         g.setFont (uiFont (12.0f * dpr));
         g.setColour (textColour.withAlpha (0.85f));
         g.drawSingleLineText ("Solo  " + juce::String::charToString ((juce::juce_wchar) 0xb7) + "  Band " + juce::String (soloed + 1),
-                              x, baseline + juce::roundToInt (18.0f * dpr));
+                              x, baseline);
     }
+}
+
+// The maker's name, quietly in the bottom-left corner, level with the ? button.
+// It makes way while the band panel is open.
+void SphereView::drawMakerMark (juce::Graphics& g, const Camera& camera, float panelAmount)
+{
+    const float alpha = 0.36f * (1.0f - panelAmount);
+    if (alpha < 0.005f)
+        return;
+
+    const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
+    auto font = uiFont (9.0f * unit, true);
+    font.setExtraKerningFactor (0.22f);
+    g.setFont (font);
+    g.setColour (warmGrey.withAlpha (alpha));
+
+    const float centreY = camera.height - helpButtonInset * unit;
+    g.drawSingleLineText ("4KDSP", juce::roundToInt (21.0f * dpr), juce::roundToInt (centreY + font.getAscent() * 0.38f));
 }
 
 // The ? button, and the list of controls that appears while hovering over it.

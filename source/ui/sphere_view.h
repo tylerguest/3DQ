@@ -182,7 +182,8 @@ private:
     void drawOverlay (juce::Graphics&, const BandSet&, const Camera&, int hovered, int dragged, int selected, float dt);
     void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected);
     void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
-    void drawTitle (juce::Graphics&, int soloed);
+    void drawTitle (juce::Graphics&, const Camera&, int soloed);
+    void drawMakerMark (juce::Graphics&, const Camera&, float panelAmount);
     void drawHelp (juce::Graphics&, const Camera&, bool hovered, float dt);
 
     juce::OpenGLContext context;

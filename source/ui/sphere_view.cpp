@@ -456,7 +456,8 @@ void SphereView::renderOpenGL()
         auto overlay = juce::createOpenGLGraphicsContext (context, width, height);
         juce::Graphics g (*overlay);
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
-        drawTitle (g, soloed);
+        drawTitle (g, camera, soloed);
+        drawMakerMark (g, camera, panelAmount);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount), dpr, panelAmount,
                        bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob);
         drawHelp (g, camera, helpHovered, dt);
