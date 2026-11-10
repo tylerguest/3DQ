@@ -623,6 +623,7 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
 
             Band band;
             band.id = slot;
+            band.stereo = true; // like a conventional EQ; the click's longitude is kept for switching to mono
             setLatLon (band, surface);
             state.bands.add (band);
 
