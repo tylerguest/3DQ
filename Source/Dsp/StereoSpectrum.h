@@ -17,14 +17,17 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereEq.h"
+#include "EqParams.h"
+
+namespace threedq
+{
 
 class StereoSpectrum
 {
 public:
     static constexpr int fftOrder = 12;
     static constexpr int fftSize  = 1 << fftOrder;
-    static constexpr int numBands = 48; // must match NUM_SPECTRUM_BANDS in the GUI
+    static constexpr int numBands = 48;
 
     struct Result
     {
@@ -89,7 +92,7 @@ private:
 
     static double bandEdge (int i)
     {
-        return threedq::minFreq * std::pow ((double) threedq::maxFreq / threedq::minFreq, (double) i / numBands);
+        return minFreq * std::pow ((double) maxFreq / minFreq, (double) i / numBands);
     }
 
     void transform (const float* input, std::vector<float>& buffer)
@@ -108,3 +111,5 @@ private:
     std::vector<double> binRR = std::vector<double> ((size_t) (fftSize / 2));
     std::vector<double> binLR = std::vector<double> ((size_t) (fftSize / 2));
 };
+
+} // namespace threedq

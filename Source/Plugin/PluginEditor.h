@@ -11,17 +11,19 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
-#include "SphereView.h"
-#include "StereoSpectrum.h"
+#include "../Ui/SphereView.h"
+#include "../Dsp/StereoSpectrum.h"
 
-//==============================================================================
-class _3DQAudioProcessorEditor  : public juce::AudioProcessorEditor,
+namespace threedq
+{
+
+class ThreeDQEditor  : public juce::AudioProcessorEditor,
                                   private juce::AudioProcessorValueTreeState::Listener,
                                   private juce::Timer
 {
 public:
-    _3DQAudioProcessorEditor (_3DQAudioProcessor&);
-    ~_3DQAudioProcessorEditor() override;
+    explicit ThreeDQEditor (ThreeDQProcessor&);
+    ~ThreeDQEditor() override;
 
     //==============================================================================
     void paint (juce::Graphics&) override;
@@ -29,12 +31,12 @@ public:
 
 private:
     // sphere -> processor
-    void applyBandsFromSphere (const sphere::BandSet& bands);
+    void applyBandsFromSphere (const BandSet& bands);
     // processor -> sphere
-    sphere::BandSet getBandsFromProcessor() const;
+    BandSet getBandsFromProcessor() const;
 
-    void handlePresetCommand (sphere::PresetCommand, int preset);
-    void bandsEditedOnSphere (const sphere::BandSet& bands);
+    void handlePresetCommand (PresetCommand, int preset);
+    void bandsEditedOnSphere (const BandSet& bands);
     void showPresetBankBands();  // after the bank's current setup changed
     void updatePresetBar();
     juce::String sessionPresetName() const;
@@ -52,7 +54,7 @@ private:
 
     static constexpr int timerHz = 30, minimumWidth = 440, minimumHeight = 340;
 
-    _3DQAudioProcessor& audioProcessor;
+    ThreeDQProcessor& audioProcessor;
     int hostWindowTicks = 0;
 
     // Set while we write parameters on the sphere's behalf, so those changes
@@ -75,5 +77,7 @@ private:
     // Last, so its render thread stops before anything it reads is destroyed.
     SphereView sphereView;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (_3DQAudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThreeDQEditor)
 };
+
+} // namespace threedq

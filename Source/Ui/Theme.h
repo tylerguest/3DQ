@@ -10,7 +10,7 @@
 
 #include <JuceHeader.h>
 
-namespace sphere
+namespace threedq
 {
 
 inline const juce::Colour warmGrey (138, 134, 124);
@@ -19,6 +19,17 @@ inline const juce::Colour cutColour (229, 72, 77);
 inline const juce::Colour graphite (17, 17, 16);
 inline const juce::Colour textColour (232, 228, 218);
 inline const juce::Colour pale (255, 252, 244);
+
+// The window side at which the panel and the on-screen buttons are drawn 1:1.
+constexpr float uiReferenceSize = 520.0f;
+
+// How much the panel and the on-screen buttons grow with the window. It follows
+// the window's smaller side, but more slowly than the window, so they don't
+// dominate a large one. Width and height are in component pixels.
+inline float uiScale (float width, float height)
+{
+    return std::max (1.0f, std::sqrt (std::min (width, height) / uiReferenceSize));
+}
 
 inline juce::String formatFreq (float freq)
 {
@@ -48,4 +59,4 @@ inline juce::Path arc (float cx, float cy, float radius, float from, float to)
     return p;
 }
 
-} // namespace sphere
+} // namespace threedq

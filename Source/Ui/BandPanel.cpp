@@ -7,14 +7,13 @@
 */
 
 #include "BandPanel.h"
-#include "SphereUi.h"
+#include "Theme.h"
 
-namespace sphere
+namespace threedq
 {
 
 namespace
 {
-constexpr float panelReferenceSize = 520.0f; // the window side at which the panel is drawn 1:1
 constexpr float panelHeight = 116.0f;
 constexpr float panelBottomInset = 10.0f;
 constexpr float toggleRadius = 10.0f;
@@ -27,11 +26,11 @@ constexpr float knobSweep = 4.71239f;
 
 enum Knob { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob };
 
-float qCeiling (const Band& b)    { return b.isShelf() ? threedq::maxShelfQ : threedq::maxQ; }
+float qCeiling (const Band& b)    { return b.isShelf() ? maxShelfQ : maxQ; }
 
 int slopeIndex (const Band& b)
 {
-    const auto& slopes = threedq::cutSlopes;
+    const auto& slopes = cutSlopes;
     const auto found = std::find (slopes.begin(), slopes.end(), b.slope);
     return found == slopes.end() ? 3 : (int) (found - slopes.begin());
 }
@@ -127,15 +126,10 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
 }
 }
 
-float panelScale (float width, float height)
-{
-    return std::max (1.0f, std::sqrt (std::min (width, height) / panelReferenceSize));
-}
-
 BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount)
 {
     BandPanelLayout l;
-    l.scale = panelScale (windowWidth, windowHeight);
+    l.scale = uiScale (windowWidth, windowHeight);
     const float width = windowWidth / l.scale, height = windowHeight / l.scale;
     const float panelWidth = std::min (width - 8.0f, std::clamp (width - 96.0f, 364.0f, 430.0f));
     const float openTop = height - panelBottomInset - panelHeight;
@@ -200,7 +194,7 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
 
 PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY, SurfaceExtent extent)
 {
-    const float room = height - panelScale (width, height) * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
+    const float room = height - uiScale (width, height) * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
     const float radius = std::min (width, height) * sphereRadiusFraction * zoom;
     const float fittedRadius = std::min (radius, (room - 2.0f * panelFitMargin) / (extent.top - extent.bottom));
 
@@ -220,11 +214,11 @@ float knobPosition (const Band& b, int knob)
         case gainKnob:   return (b.gainDb + maxGainDb) / (2.0f * maxGainDb);
         case qKnob:
             if (b.isCut())
-                return (float) slopeIndex (b) / (float) (threedq::cutSlopes.size() - 1);
-            return std::log (b.q / threedq::minQ) / std::log (qCeiling (b) / threedq::minQ);
+                return (float) slopeIndex (b) / (float) (cutSlopes.size() - 1);
+            return std::log (b.q / minQ) / std::log (qCeiling (b) / minQ);
         case posKnob:    return (b.lon / pi + 1.0f) / 2.0f;
         case rangeKnob:  return (b.range + maxGainDb) / (2.0f * maxGainDb);
-        default:         return (b.threshold - threedq::minThresholdDb) / (threedq::maxThresholdDb - threedq::minThresholdDb);
+        default:         return (b.threshold - minThresholdDb) / (maxThresholdDb - minThresholdDb);
     }
 }
 
@@ -238,9 +232,9 @@ void setKnobPosition (Band& b, int knob, float position)
         case gainKnob:  b.gainDb = snapDb ((t * 2.0f - 1.0f) * maxGainDb); break;
         case qKnob:
             if (b.isCut())
-                b.slope = threedq::cutSlopes[(size_t) std::lround (t * (float) (threedq::cutSlopes.size() - 1))];
+                b.slope = cutSlopes[(size_t) std::lround (t * (float) (cutSlopes.size() - 1))];
             else
-                b.q = threedq::minQ * std::pow (qCeiling (b) / threedq::minQ, t);
+                b.q = minQ * std::pow (qCeiling (b) / minQ, t);
             break;
         case posKnob:   b.lon = (t * 2.0f - 1.0f) * pi; break;
         case rangeKnob:
@@ -249,7 +243,7 @@ void setKnobPosition (Band& b, int knob, float position)
                 b.range = 0;
             break;
         default:
-            b.threshold = snapDb (threedq::minThresholdDb + t * (threedq::maxThresholdDb - threedq::minThresholdDb));
+            b.threshold = snapDb (minThresholdDb + t * (maxThresholdDb - minThresholdDb));
             break;
     }
 }
@@ -432,4 +426,4 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
     strokeRounded (g, chevron, 1.5f);
 }
 
-} // namespace sphere
+} // namespace threedq

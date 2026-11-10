@@ -30,16 +30,23 @@
     shared between them and always accessed under `stateLock`, held only long
     enough to read or change it.
 
+    Source files: SphereView.cpp (set-up, state, render loop),
+    SphereViewInput.cpp (mouse and wheel) and SphereViewOverlay.cpp (nodes,
+    labels, title, help).
+
   ==============================================================================
 */
 
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereField.h"
-#include "SpriteRenderer.h"
+#include "../Render/SphereField.h"
+#include "../Render/SpriteRenderer.h"
 #include "BandPanel.h"
 #include "PresetBar.h"
+
+namespace threedq
+{
 
 class SphereView  : public juce::Component,
                     private juce::OpenGLRenderer
@@ -49,26 +56,26 @@ public:
     struct LiveAudio
     {
         StereoSpectrum::Result spectrum;
-        std::array<float, sphere::maxBands> gainDb {}, levelDb {};
+        std::array<float, maxBands> gainDb {}, levelDb {};
     };
 
     SphereView();
     ~SphereView() override;
 
     // Set these before the view is shown.
-    std::function<void (const sphere::BandSet&)> onBandsEdited; // message thread
+    std::function<void (const BandSet&)> onBandsEdited; // message thread
     std::function<void (LiveAudio&)> readLiveAudio;             // render thread
     std::function<void (int band)> onSoloChanged;               // message thread; -1 = none
-    std::function<void (sphere::PresetCommand, int preset)> onPresetCommand; // message thread
+    std::function<void (PresetCommand, int preset)> onPresetCommand; // message thread
 
     // Bands pushed from outside (host automation, preset load). Ignored during a drag.
-    void setBands (const sphere::BandSet& bands);
+    void setBands (const BandSet& bands);
 
     // The same, for a new EQ as a whole (preset, undo, A/B): the view eases over
     // to centre the new shape.
-    void showNewBands (const sphere::BandSet& bands);
+    void showNewBands (const BandSet& bands);
 
-    void setPresetInfo (sphere::PresetBarInfo);
+    void setPresetInfo (PresetInfo);
 
     void resized() override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -109,27 +116,27 @@ private:
 
     struct SharedState
     {
-        sphere::BandSet bands;
+        BandSet bands;
         float yaw = 0, pitch = -0.35f, zoom = 0.905f, yawVelocity = 0, pitchVelocity = 0;
         float panX = 0, panY = 0; // component pixels
         bool recentring = false;
-        sphere::PanelViewFit recentreFit; // where a recentre ends up with the panel open
+        PanelViewFit recentreFit; // where a recentre ends up with the panel open
         // Panel closed: how far below the window's centre the sphere's centre sits,
         // in sphere radii, so the EQ'd shape is what looks centred.
         float restCentre = 0, recentreRest = 0;
         bool restCentrePlaced = false, easingRestCentre = false;
         bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
-        sphere::PanelTarget panelHover;
-        sphere::PresetTarget presetHover;
-        std::shared_ptr<const sphere::PresetBarInfo> presetInfo = std::make_shared<sphere::PresetBarInfo>();
+        PanelTarget panelHover;
+        PresetTarget presetHover;
+        std::shared_ptr<const PresetInfo> presetInfo = std::make_shared<PresetInfo>();
         bool presetMenuOpen = false;
         int presetMenuScroll = 0;
         int selected = -1; // the band last clicked: highlighted, and what the panel controls
         int soloLatched = -1, soloHeld = -1; // from the panel's S button, and Alt+hold on a node
         float panelAmount = 0; // eased 0..1, as the panel slides
-        sphere::PanelViewFit panelFit;
+        PanelViewFit panelFit;
         int hovered = -1, dragged = -1;
-        std::array<float, sphere::maxBands> liveLevelDb {};
+        std::array<float, maxBands> liveLevelDb {};
         double lastInteraction = 0;
     };
 
@@ -138,20 +145,20 @@ private:
     void openGLContextClosing() override;
 
     // Callers hold stateLock for all of these.
-    sphere::Camera cameraLocked() const;
-    sphere::Camera makeCameraLocked (float width, float height, float scale) const;
+    Camera cameraLocked() const;
+    Camera makeCameraLocked (float width, float height, float scale) const;
     void updatePanelFitLocked();
-    sphere::PanelViewFit panelFitLocked (float panY) const;
+    PanelViewFit panelFitLocked (float panY) const;
     float restCentreLocked() const;
-    sphere::Vec3 bandScreenPos (const sphere::Band&, const sphere::BandDirections&, const sphere::Camera&) const;
-    float handleRadius (const sphere::Band&, const sphere::BandDirections&) const;
-    int hitBand (juce::Point<float> devicePosition, const sphere::Camera&) const;
+    Vec3 bandScreenPos (const Band&, const BandDirections&, const Camera&) const;
+    float handleRadius (const Band&, const BandDirections&) const;
+    int hitBand (juce::Point<float> devicePosition, const Camera&) const;
     void updateCursorLocked();
     void clampPanLocked();
     void validateSelectionLocked();
     void selectNeighbourLocked (int direction);
-    sphere::PanelTarget panelTargetLocked (juce::Point<float> position) const;
-    sphere::PresetBarLayout presetLayoutLocked() const;
+    PanelTarget panelTargetLocked (juce::Point<float> position) const;
+    PresetBarLayout presetLayoutLocked() const;
     bool overHelpButton (juce::Point<float> position) const;
 
     void pointerMoved (const juce::MouseEvent&);
@@ -167,28 +174,28 @@ private:
     bool panelDoubleClick (const juce::MouseEvent&);
     bool panelWheel (const juce::MouseEvent&, float delta);
 
-    void notifyBandsEdited (const sphere::BandSet&);
+    void notifyBandsEdited (const BandSet&);
     void publishSolo();
     juce::Point<float> toDevice (juce::Point<float> position) const;
 
-    void drawOverlay (juce::Graphics&, const sphere::BandSet&, const sphere::Camera&, int hovered, int dragged, int selected, float dt);
-    void drawNode (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, float emphasis, bool selected);
-    void drawLabel (juce::Graphics&, const sphere::Band&, sphere::Vec3 screen, const sphere::Camera&, float liveLevelDb);
+    void drawOverlay (juce::Graphics&, const BandSet&, const Camera&, int hovered, int dragged, int selected, float dt);
+    void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected);
+    void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
     void drawTitle (juce::Graphics&, int soloed);
-    void drawHelp (juce::Graphics&, const sphere::Camera&, bool hovered, float dt);
+    void drawHelp (juce::Graphics&, const Camera&, bool hovered, float dt);
 
     juce::OpenGLContext context;
-    sphere::SphereField field;
-    sphere::SpriteRenderer renderer;
-    sphere::SpriteList sprites;
+    SphereField field;
+    SpriteRenderer renderer;
+    SpriteList sprites;
     LiveAudio live;
 
     // Render thread only.
     double lastFrameTime = 0;
     float autoBlend = 0;
-    std::optional<sphere::SurfaceExtent> shownExtent; // eased, as the surface's springs ease
+    std::optional<SurfaceExtent> shownExtent; // eased, as the surface's springs ease
     float helpAmount = 0, presetMenuAmount = 0;
-    std::array<float, sphere::maxBands> nodeEmphasis {};
+    std::array<float, maxBands> nodeEmphasis {};
     float dpr = 1;
     double statsStart = 0, statsCpu = 0;
     int statsFrames = 0;
@@ -214,3 +221,5 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SphereView)
 };
+
+} // namespace threedq

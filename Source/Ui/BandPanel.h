@@ -15,9 +15,9 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereModel.h"
+#include "../Model/Camera.h"
 
-namespace sphere
+namespace threedq
 {
 
 constexpr int numPanelKnobs = 6;  // frequency, gain, Q or slope, position, range, threshold
@@ -32,11 +32,6 @@ struct PanelTarget
 
     bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index; }
 };
-
-// How much the panel and the on-screen buttons grow with the window. It follows
-// the window's smaller side, but more slowly than the window, so they don't
-// dominate a large one. Width and height are in component pixels.
-float panelScale (float width, float height);
 
 struct BandPanelLayout
 {
@@ -73,4 +68,4 @@ bool knobIsStepped (const Band&, int knob);
 void drawBandPanel (juce::Graphics&, const BandPanelLayout&, float dpr, float openAmount,
                     const Band* band, bool soloed, PanelTarget hover, int activeKnob);
 
-} // namespace sphere
+} // namespace threedq

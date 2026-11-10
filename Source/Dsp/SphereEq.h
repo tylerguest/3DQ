@@ -44,49 +44,12 @@
 
 #pragma once
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <cmath>
+#include "EqParams.h"
+#include "FilterDesign.h"
 
-namespace threedq
+namespace threedq::dsp
 {
-
-constexpr int   maxBands  = 12;
-constexpr float minFreq   = 20.0f;
-constexpr float maxFreq   = 20000.0f;
-constexpr float maxGainDb = 30.0f;
-constexpr float minQ      = 0.3f;
-constexpr float maxQ      = 10.0f;
-constexpr float maxShelfQ = 2.0f; // higher resonates far past the shelf's own gain
-constexpr float minThresholdDb = -60.0f;
-constexpr float maxThresholdDb = 0.0f;
-
-// The values are the plugin's choice parameter, so new types go at the end.
-enum class FilterType { peak = 0, lowCut = 1, highCut = 2, lowShelf = 3, highShelf = 4 };
-
-constexpr bool isCutType (FilterType t)     { return t == FilterType::lowCut || t == FilterType::highCut; }
-constexpr bool isShelfType (FilterType t)   { return t == FilterType::lowShelf || t == FilterType::highShelf; }
-
-// Cut slopes in dB/oct (order = slope / 6). Index = the plugin's choice parameter.
-constexpr std::array<int, 6> cutSlopes { 6, 12, 18, 24, 36, 48 };
-constexpr int maxSections = 4; // biquads per band: order 8 = 4 sections
-
-struct BandParams
-{
-    bool  enabled = false;
-    float freq    = 1000.0f;
-    float gainDb  = 0.0f;
-    float q       = 1.0f;
-    float posDeg  = 0.0f; // stereo position (longitude), -180..180
-    float rangeDb = 0.0f; // dynamic range; 0 = static band
-    float thresholdDb = -30.0f; // dBFS, of the band's own (band-passed) signal
-    FilterType type = FilterType::peak;
-    int slopeDbPerOct = 24; // cuts only
-    bool  stereo = false; // filter L and R alike instead of one stereo axis
-};
-
-constexpr double pi = 3.14159265358979323846;
 
 // Axis angle φ in radians. u and -u are the same axis, so φ is only meaningful mod π.
 inline double stereoAxisAngle (double posDeg)
@@ -281,18 +244,16 @@ private:
         int order = 0; // cuts: Butterworth order (slope / 6)
         bool stereo = false;
 
-        // z1 / z2 are the band's own state; zr1 / zr2 the right channel's in stereo mode.
-        struct Section { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0, zr1 = 0, zr2 = 0; };
-        std::array<Section, maxSections> sections {};
+        std::array<Biquad, maxSections> sections {};
         int numSections = 1;
         double mix = 0.0, mixPrevious = 0.0; // 0..1 wet amount (ramped per sample)
 
-        Section sidechain;
+        Biquad sidechain;
 
         void clearState()
         {
-            for (auto& f : sections) f.z1 = f.z2 = f.zr1 = f.zr2 = 0.0;
-            sidechain.z1 = sidechain.z2 = sidechain.zr1 = sidechain.zr2 = 0.0;
+            for (auto& f : sections) f.clear();
+            sidechain.clear();
         }
 
         // Dynamics
@@ -308,18 +269,9 @@ private:
         double targetLogFreq = 0.0, targetLogQ = 0.0, targetPhi = 0.0;
         double logFreq = 0.0, logQ = 0.0, phi = 0.0;
         double mix = 0.0, mixPrevious = 0.0; // 0 = the EQ's output, 1 = the solo
-        Band::Section filter;
+        Biquad filter;
         std::array<float, subBlockSize> inputLeft {}, inputRight {}; // the EQ's input, this sub-block
     };
-
-    // One transposed direct form II section.
-    static double runSection (const Band::Section& f, double& z1, double& z2, double in)
-    {
-        const double out = f.b0 * in + z1;
-        z1 = f.b1 * in - f.a1 * out + z2;
-        z2 = f.b2 * in - f.a2 * out;
-        return out;
-    }
 
     void followEnvelope (Band& b, double level) const
     {
@@ -383,38 +335,6 @@ private:
         return true;
     }
 
-    // What a band works on, for its detector and for solo: a band-pass (RBJ, 0 dB
-    // peak gain) at its frequency and Q; for a shelf or cut, a Butterworth low- or
-    // high-pass covering what the shelf moves or the cut removes.
-    void designListenFilter (Band::Section& f, FilterType type, double freq, double q) const
-    {
-        const double w0    = 2.0 * pi * freq / sampleRate;
-        const double cosw0 = std::cos (w0);
-        const double sinw0 = std::sin (w0);
-
-        if (isShelfType (type) || isCutType (type))
-        {
-            const double alpha = sinw0 / std::sqrt (2.0);
-            const double s0 = 1.0 + alpha;
-            const double sign = type == FilterType::lowShelf || type == FilterType::lowCut ? 1.0 : -1.0;
-            f.b0 = (1.0 - sign * cosw0) / 2.0 / s0;
-            f.b1 = sign * (1.0 - sign * cosw0) / s0;
-            f.b2 = f.b0;
-            f.a1 = (-2.0 * cosw0) / s0;
-            f.a2 = (1.0 - alpha) / s0;
-        }
-        else
-        {
-            const double alpha = sinw0 / (2.0 * q);
-            const double s0 = 1.0 + alpha;
-            f.b0 = alpha / s0;
-            f.b1 = 0.0;
-            f.b2 = -alpha / s0;
-            f.a1 = (-2.0 * cosw0) / s0;
-            f.a2 = (1.0 - alpha) / s0;
-        }
-    }
-
     // Crossfades this sub-block toward the solo, or back to the EQ's output.
     void applySolo (float* left, float* right, int n)
     {
@@ -424,8 +344,7 @@ private:
             solo.logFreq = solo.targetLogFreq;
             solo.logQ    = solo.targetLogQ;
             solo.phi     = solo.targetPhi;
-            auto& f = solo.filter;
-            f.z1 = f.z2 = f.zr1 = f.zr2 = 0.0;
+            solo.filter.clear();
         }
 
         solo.logFreq += (solo.targetLogFreq - solo.logFreq) * smoothingCoeff;
@@ -437,7 +356,7 @@ private:
             solo.mix = 0.0;
 
         auto& f = solo.filter;
-        designListenFilter (f, solo.type, std::min (std::exp (solo.logFreq), 0.49 * sampleRate), std::exp (solo.logQ));
+        designListenFilter (f, solo.type, std::min (std::exp (solo.logFreq), 0.49 * sampleRate), std::exp (solo.logQ), sampleRate);
 
         const double uL = std::cos (solo.phi), uR = std::sin (solo.phi);
         const double mixStep = (solo.mix - solo.mixPrevious) / n;
@@ -470,91 +389,25 @@ private:
     // Filter coefficients for the band's current (smoothed) settings.
     void updateCoefficients (Band& b) const
     {
-        const double freq  = std::min (std::exp (b.logFreq), 0.49 * sampleRate);
-        const double q     = std::exp (b.logQ);
-        const double w0    = 2.0 * pi * freq / sampleRate;
-        const double cosw0 = std::cos (w0);
-        const double sinw0 = std::sin (w0);
+        const double freq = std::min (std::exp (b.logFreq), 0.49 * sampleRate);
+        const double q    = std::exp (b.logQ);
 
-        designListenFilter (b.sidechain, b.type, freq, q);
+        designListenFilter (b.sidechain, b.type, freq, q, sampleRate);
+
+        if (isCutType (b.type))
+        {
+            b.numSections = designCut (b.sections, b.type == FilterType::lowCut, b.order, freq, sampleRate); // a low cut is a high-pass
+            return;
+        }
+
+        const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
 
         if (b.type == FilterType::peak)
-        {
-            // RBJ cookbook peaking EQ (same as Web Audio's "peaking" BiquadFilterNode).
-            const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
-            const double A     = std::pow (10.0, totalDb / 40.0);
-            const double alpha = sinw0 / (2.0 * q);
-            const double a0    = 1.0 + alpha / A;
-            auto& f = b.sections[0];
-            f.b0 = (1.0 + alpha * A) / a0;
-            f.b1 = (-2.0 * cosw0) / a0;
-            f.b2 = (1.0 - alpha * A) / a0;
-            f.a1 = (-2.0 * cosw0) / a0;
-            f.a2 = (1.0 - alpha / A) / a0;
-            b.numSections = 1;
-            return;
-        }
+            designPeak (b.sections[0], freq, q, totalDb, sampleRate);
+        else
+            designShelf (b.sections[0], b.type == FilterType::lowShelf, freq, q, totalDb, sampleRate);
 
-        if (isShelfType (b.type))
-        {
-            // RBJ cookbook shelves; the high shelf is the low shelf with cos(w0) negated
-            // and b1 / a1 flipped.
-            const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
-            const double A     = std::pow (10.0, totalDb / 40.0);
-            const double alpha = sinw0 / (2.0 * std::min (q, (double) maxShelfQ));
-            const double root  = 2.0 * std::sqrt (A) * alpha;
-            const double sign  = b.type == FilterType::lowShelf ? 1.0 : -1.0;
-            const double cs    = sign * cosw0;
-            const double a0    = (A + 1.0) + (A - 1.0) * cs + root;
-            auto& f = b.sections[0];
-            f.b0 = A * ((A + 1.0) - (A - 1.0) * cs + root) / a0;
-            f.b1 = sign * 2.0 * A * ((A - 1.0) - (A + 1.0) * cs) / a0;
-            f.b2 = A * ((A + 1.0) - (A - 1.0) * cs - root) / a0;
-            f.a1 = -sign * 2.0 * ((A - 1.0) + (A + 1.0) * cs) / a0;
-            f.a2 = ((A + 1.0) + (A - 1.0) * cs - root) / a0;
-            b.numSections = 1;
-            return;
-        }
-
-        // Butterworth cut of order n: n/2 RBJ second-order sections with the
-        // Butterworth Qs, plus one first-order section when n is odd.
-        const bool high = b.type == FilterType::lowCut; // a low cut is a high-pass
-        const int n = b.order;
-        int k = 0;
-        for (int i = 0; i < n / 2; ++i)
-        {
-            const double theta = n % 2 == 0 ? (2.0 * i + 1.0) * pi / (2.0 * n) : (i + 1.0) * pi / n;
-            const double sq = 1.0 / (2.0 * std::cos (theta));
-            const double alpha = sinw0 / (2.0 * sq);
-            const double a0 = 1.0 + alpha;
-            auto& f = b.sections[(size_t) k++];
-            if (high)
-            {
-                f.b0 = (1.0 + cosw0) / 2.0 / a0;
-                f.b1 = -(1.0 + cosw0) / a0;
-                f.b2 = f.b0;
-            }
-            else
-            {
-                f.b0 = (1.0 - cosw0) / 2.0 / a0;
-                f.b1 = (1.0 - cosw0) / a0;
-                f.b2 = f.b0;
-            }
-            f.a1 = (-2.0 * cosw0) / a0;
-            f.a2 = (1.0 - alpha) / a0;
-        }
-        if (n % 2 == 1)
-        {
-            // First order, bilinear transform with prewarping.
-            const double K = std::tan (pi * freq / sampleRate);
-            auto& f = b.sections[(size_t) k++];
-            f.b0 = high ? 1.0 / (1.0 + K) : K / (1.0 + K);
-            f.b1 = high ? -f.b0 : f.b0;
-            f.b2 = 0.0;
-            f.a1 = (K - 1.0) / (K + 1.0);
-            f.a2 = 0.0;
-        }
-        b.numSections = k;
+        b.numSections = 1;
     }
 
     double sampleRate = 48000.0;
@@ -566,4 +419,4 @@ private:
     std::array<std::atomic<float>, maxBands> currentLevelDb {};
 };
 
-} // namespace threedq
+} // namespace threedq::dsp

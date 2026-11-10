@@ -8,7 +8,7 @@
 
 #include "PresetBank.h"
 
-namespace sphere
+namespace threedq
 {
 
 namespace
@@ -84,18 +84,18 @@ std::optional<BandSet> fromXml (const juce::XmlElement* root)
         if (b.id < 0 || b.id >= maxBands || bands.find (b.id) != nullptr)
             continue;
 
-        b.lat = freqToLat (std::clamp ((float) e->getDoubleAttribute ("freq", 1000.0), threedq::minFreq, threedq::maxFreq));
+        b.lat = freqToLat (std::clamp ((float) e->getDoubleAttribute ("freq", 1000.0), minFreq, maxFreq));
         b.lon = std::clamp ((float) e->getDoubleAttribute ("pos", 0.0), -180.0f, 180.0f) * pi / 180.0f;
-        b.gainDb = std::clamp ((float) e->getDoubleAttribute ("gain", 0.0), -threedq::maxGainDb, threedq::maxGainDb);
+        b.gainDb = std::clamp ((float) e->getDoubleAttribute ("gain", 0.0), -maxGainDb, maxGainDb);
         b.muted = e->getBoolAttribute ("mute", false);
-        b.range = std::clamp ((float) e->getDoubleAttribute ("range", 0.0), -threedq::maxGainDb, threedq::maxGainDb);
-        b.threshold = std::clamp ((float) e->getDoubleAttribute ("threshold", defaultThresholdDb), threedq::minThresholdDb, threedq::maxThresholdDb);
+        b.range = std::clamp ((float) e->getDoubleAttribute ("range", 0.0), -maxGainDb, maxGainDb);
+        b.threshold = std::clamp ((float) e->getDoubleAttribute ("threshold", defaultThresholdDb), minThresholdDb, maxThresholdDb);
         b.type = (FilterType) std::clamp (e->getIntAttribute ("type", 0), 0, 4);
         b.stereo = e->getBoolAttribute ("stereo", false);
-        b.q = std::clamp ((float) e->getDoubleAttribute ("q", 1.0), threedq::minQ, b.isShelf() ? threedq::maxShelfQ : threedq::maxQ);
+        b.q = std::clamp ((float) e->getDoubleAttribute ("q", 1.0), minQ, b.isShelf() ? maxShelfQ : maxQ);
 
         const int slope = e->getIntAttribute ("slope", defaultCutSlope);
-        const auto& slopes = threedq::cutSlopes;
+        const auto& slopes = cutSlopes;
         b.slope = std::find (slopes.begin(), slopes.end(), slope) != slopes.end() ? slope : defaultCutSlope;
 
         bands.add (b);
@@ -326,10 +326,10 @@ bool PresetBank::remove (int index)
     return true;
 }
 
-PresetBarInfo PresetBank::info() const
+PresetInfo PresetBank::info() const
 {
     const auto& slot = slots[active];
-    PresetBarInfo result;
+    PresetInfo result;
     result.name = slot.now.name;
     result.dirty = ! slot.now.saved.has_value() || ! sameBands (slot.now.bands, *slot.now.saved);
     result.canUndo = ! slot.undo.empty();
@@ -341,4 +341,4 @@ PresetBarInfo PresetBank::info() const
     return result;
 }
 
-} // namespace sphere
+} // namespace threedq

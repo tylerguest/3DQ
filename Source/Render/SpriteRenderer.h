@@ -13,9 +13,9 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereField.h"
+#include "Sprites.h"
 
-namespace sphere
+namespace threedq
 {
 
 class SpriteRenderer
@@ -38,4 +38,4 @@ private:
     size_t bufferBytes = 0;
 };
 
-} // namespace sphere
+} // namespace threedq

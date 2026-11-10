@@ -7,10 +7,9 @@
 */
 
 #include "PresetBar.h"
-#include "BandPanel.h"
-#include "SphereUi.h"
+#include "Theme.h"
 
-namespace sphere
+namespace threedq
 {
 
 namespace
@@ -57,7 +56,7 @@ void drawChevron (juce::Graphics& g, juce::Point<float> c, float direction, juce
 PresetBarLayout PresetBarLayout::make (float windowWidth, float windowHeight, int presetCount, int scroll)
 {
     PresetBarLayout l;
-    l.scale = panelScale (windowWidth, windowHeight);
+    l.scale = uiScale (windowWidth, windowHeight);
     l.presetCount = presetCount;
     const float width = windowWidth / l.scale, height = windowHeight / l.scale;
 
@@ -136,7 +135,7 @@ PresetTarget PresetBarLayout::hit (juce::Point<float> position, bool menuOpen) c
     return {};
 }
 
-void drawPresetBar (juce::Graphics& g, const PresetBarLayout& l, float dpr, const PresetBarInfo& info, PresetTarget hover, float menuAmount)
+void drawPresetBar (juce::Graphics& g, const PresetBarLayout& l, float dpr, const PresetInfo& info, PresetTarget hover, float menuAmount)
 {
     using Kind = PresetTarget::Kind;
 
@@ -241,4 +240,4 @@ void drawPresetBar (juce::Graphics& g, const PresetBarLayout& l, float dpr, cons
     }
 }
 
-} // namespace sphere
+} // namespace threedq

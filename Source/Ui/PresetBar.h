@@ -14,20 +14,10 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "../Model/PresetTypes.h"
 
-namespace sphere
+namespace threedq
 {
-
-// What the bar shows.
-struct PresetBarInfo
-{
-    juce::String name;
-    bool dirty = false, canUndo = false, canRedo = false, showingB = false, canSave = false;
-    juce::StringArray presets; // the built-in default first, then the saved ones
-    int current = -1;          // index in presets; -1 = not in the list
-};
-
-enum class PresetCommand { undo, redo, toggleAB, copyAB, previous, next, refresh, save, saveAs, load, remove };
 
 struct PresetTarget
 {
@@ -57,6 +47,6 @@ struct PresetBarLayout
 };
 
 // menuAmount: 0 = closed, 1 = fully shown.
-void drawPresetBar (juce::Graphics&, const PresetBarLayout&, float dpr, const PresetBarInfo&, PresetTarget hover, float menuAmount);
+void drawPresetBar (juce::Graphics&, const PresetBarLayout&, float dpr, const PresetInfo&, PresetTarget hover, float menuAmount);
 
-} // namespace sphere
+} // namespace threedq

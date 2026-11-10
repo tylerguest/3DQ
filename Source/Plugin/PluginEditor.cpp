@@ -16,31 +16,34 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "HostWindow.h"
-#include "SphereUi.h"
+#include "../Ui/Theme.h"
+
+namespace threedq
+{
 
 namespace
 {
-constexpr float degreesPerRadian = 180.0f / sphere::pi;
+constexpr float degreesPerRadian = 180.0f / pi;
 const juce::Identifier presetNameProperty ("presetName");
 
 int slopeIndexFromDb (int slope)
 {
     // Nearest available slope.
     int best = 0;
-    for (size_t i = 0; i < threedq::cutSlopes.size(); ++i)
-        if (std::abs (threedq::cutSlopes[i] - slope) < std::abs (threedq::cutSlopes[(size_t) best] - slope))
+    for (size_t i = 0; i < cutSlopes.size(); ++i)
+        if (std::abs (cutSlopes[i] - slope) < std::abs (cutSlopes[(size_t) best] - slope))
             best = (int) i;
     return best;
 }
 }
 
 //==============================================================================
-_3DQAudioProcessorEditor::_3DQAudioProcessorEditor (_3DQAudioProcessor& p)
+ThreeDQEditor::ThreeDQEditor (ThreeDQProcessor& p)
     : AudioProcessorEditor (&p),
       audioProcessor (p)
 {
-    sphereView.onBandsEdited = [this] (const sphere::BandSet& bands) { bandsEditedOnSphere (bands); };
-    sphereView.onPresetCommand = [this] (sphere::PresetCommand command, int preset) { handlePresetCommand (command, preset); };
+    sphereView.onBandsEdited = [this] (const BandSet& bands) { bandsEditedOnSphere (bands); };
+    sphereView.onPresetCommand = [this] (PresetCommand command, int preset) { handlePresetCommand (command, preset); };
     sphereView.readLiveAudio = [this] (SphereView::LiveAudio& live) { readLiveAudio (live); };
     sphereView.onSoloChanged = [this] (int band) { audioProcessor.setSoloBand (band); };
     sphereView.setBands (getBandsFromProcessor());
@@ -48,9 +51,9 @@ _3DQAudioProcessorEditor::_3DQAudioProcessorEditor (_3DQAudioProcessor& p)
     updatePresetBar();
     addAndMakeVisible (sphereView);
 
-    for (int i = 0; i < threedq::maxBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
-        const auto ids = _3DQAudioProcessor::getBandParamIDs (i);
+        const auto ids = ThreeDQProcessor::getBandParamIDs (i);
         for (const auto& id : { ids.enabled, ids.freq, ids.gain, ids.q, ids.pos, ids.mute, ids.range, ids.threshold, ids.type, ids.slope, ids.stereo })
             audioProcessor.state.addParameterListener (id, this);
     }
@@ -62,23 +65,22 @@ _3DQAudioProcessorEditor::_3DQAudioProcessorEditor (_3DQAudioProcessor& p)
     setSize (520, 520);
 }
 
-_3DQAudioProcessorEditor::~_3DQAudioProcessorEditor()
+ThreeDQEditor::~ThreeDQEditor()
 {
     // Solo is only for while you're looking at it: the track must not stay filtered.
     audioProcessor.setSoloBand (-1);
 
-    for (int i = 0; i < threedq::maxBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
-        const auto ids = _3DQAudioProcessor::getBandParamIDs (i);
+        const auto ids = ThreeDQProcessor::getBandParamIDs (i);
         for (const auto& id : { ids.enabled, ids.freq, ids.gain, ids.q, ids.pos, ids.mute, ids.range, ids.threshold, ids.type, ids.slope, ids.stereo })
             audioProcessor.state.removeParameterListener (id, this);
     }
 }
 
 //==============================================================================
-_3DQAudioProcessorEditor::DialogLook::DialogLook()
+ThreeDQEditor::DialogLook::DialogLook()
 {
-    using namespace sphere;
     const juce::Colour field (0xff1a1a18), line (0xff34332f);
 
     setColour (juce::AlertWindow::backgroundColourId, graphite);
@@ -97,34 +99,33 @@ _3DQAudioProcessorEditor::DialogLook::DialogLook()
     setColour (juce::ComboBox::outlineColourId, line);
 }
 
-void _3DQAudioProcessorEditor::bandsEditedOnSphere (const sphere::BandSet& bands)
+void ThreeDQEditor::bandsEditedOnSphere (const BandSet& bands)
 {
     applyBandsFromSphere (bands);
     audioProcessor.presets.edited (bands);
     updatePresetBar();
 }
 
-juce::String _3DQAudioProcessorEditor::sessionPresetName() const
+juce::String ThreeDQEditor::sessionPresetName() const
 {
     return audioProcessor.state.state.getProperty (presetNameProperty).toString();
 }
 
-void _3DQAudioProcessorEditor::updatePresetBar()
+void ThreeDQEditor::updatePresetBar()
 {
     audioProcessor.state.state.setProperty (presetNameProperty, audioProcessor.presets.name(), nullptr);
     sphereView.setPresetInfo (audioProcessor.presets.info());
 }
 
-void _3DQAudioProcessorEditor::showPresetBankBands()
+void ThreeDQEditor::showPresetBankBands()
 {
     applyBandsFromSphere (audioProcessor.presets.bands());
     sphereView.showNewBands (audioProcessor.presets.bands());
     updatePresetBar();
 }
 
-void _3DQAudioProcessorEditor::handlePresetCommand (sphere::PresetCommand command, int preset)
+void ThreeDQEditor::handlePresetCommand (PresetCommand command, int preset)
 {
-    using sphere::PresetCommand;
     auto& bank = audioProcessor.presets;
     const auto loaded = [this] (bool ok)
     {
@@ -158,19 +159,19 @@ void _3DQAudioProcessorEditor::handlePresetCommand (sphere::PresetCommand comman
     }
 }
 
-void _3DQAudioProcessorEditor::askToSaveAs()
+void ThreeDQEditor::askToSaveAs()
 {
     const auto current = audioProcessor.presets.name();
-    const auto suggestion = sphere::PresetBank::isReservedName (current) ? juce::String ("New preset") : current;
+    const auto suggestion = PresetBank::isReservedName (current) ? juce::String ("New preset") : current;
 
     showPresetDialog ("Save preset", {}, suggestion, "Save", [this] (const juce::String& entered)
     {
-        const auto name = sphere::PresetBank::legalName (entered);
+        const auto name = PresetBank::legalName (entered);
 
         if (name.isEmpty())
             return;
 
-        if (sphere::PresetBank::isReservedName (name))
+        if (PresetBank::isReservedName (name))
         {
             showPresetError ("\"" + name + "\" is the built-in preset. Choose another name.");
             return;
@@ -183,7 +184,7 @@ void _3DQAudioProcessorEditor::askToSaveAs()
     });
 }
 
-void _3DQAudioProcessorEditor::saveUnderName (const juce::String& name)
+void ThreeDQEditor::saveUnderName (const juce::String& name)
 {
     if (! audioProcessor.presets.saveAs (name))
         showPresetError ("That preset couldn't be saved.");
@@ -191,8 +192,8 @@ void _3DQAudioProcessorEditor::saveUnderName (const juce::String& name)
     updatePresetBar();
 }
 
-void _3DQAudioProcessorEditor::showPresetDialog (const juce::String& title, const juce::String& message, const juce::String& initialText,
-                                                 const juce::String& confirmLabel, std::function<void (const juce::String&)> onConfirm)
+void ThreeDQEditor::showPresetDialog (const juce::String& title, const juce::String& message, const juce::String& initialText,
+                                      const juce::String& confirmLabel, std::function<void (const juce::String&)> onConfirm)
 {
     presetDialog = std::make_unique<juce::AlertWindow> (title, message, juce::MessageBoxIconType::NoIcon, this);
     presetDialog->setLookAndFeel (&dialogLook);
@@ -223,20 +224,20 @@ void _3DQAudioProcessorEditor::showPresetDialog (const juce::String& title, cons
         }), false);
 }
 
-void _3DQAudioProcessorEditor::showPresetError (const juce::String& message)
+void ThreeDQEditor::showPresetError (const juce::String& message)
 {
     showPresetDialog ("3DQ", message, {}, "OK", [] (const juce::String&) {});
 }
 
 //==============================================================================
-void _3DQAudioProcessorEditor::applyBandsFromSphere (const sphere::BandSet& bands)
+void ThreeDQEditor::applyBandsFromSphere (const BandSet& bands)
 {
     applyingSphereEdit = true;
     const juce::ScopeGuard resetFlag { [this] { applyingSphereEdit = false; } };
 
-    std::array<const sphere::Band*, threedq::maxBands> bySlot {};
+    std::array<const Band*, maxBands> bySlot {};
     for (const auto& b : bands)
-        if (b.id >= 0 && b.id < threedq::maxBands)
+        if (b.id >= 0 && b.id < maxBands)
             bySlot[(size_t) b.id] = &b;
 
     auto set = [this] (const juce::String& id, float value)
@@ -249,13 +250,13 @@ void _3DQAudioProcessorEditor::applyBandsFromSphere (const sphere::BandSet& band
         }
     };
 
-    for (int slot = 0; slot < threedq::maxBands; ++slot)
+    for (int slot = 0; slot < maxBands; ++slot)
     {
-        const auto ids = _3DQAudioProcessor::getBandParamIDs (slot);
+        const auto ids = ThreeDQProcessor::getBandParamIDs (slot);
 
         if (const auto* b = bySlot[(size_t) slot])
         {
-            set (ids.freq, sphere::latToFreq (b->lat));
+            set (ids.freq, latToFreq (b->lat));
             set (ids.gain, b->gainDb);
             set (ids.q, b->q);
             set (ids.pos, b->lon * degreesPerRadian);
@@ -277,19 +278,19 @@ void _3DQAudioProcessorEditor::applyBandsFromSphere (const sphere::BandSet& band
     }
 }
 
-sphere::BandSet _3DQAudioProcessorEditor::getBandsFromProcessor() const
+BandSet ThreeDQEditor::getBandsFromProcessor() const
 {
-    sphere::BandSet result;
+    BandSet result;
 
-    for (int slot = 0; slot < threedq::maxBands; ++slot)
+    for (int slot = 0; slot < maxBands; ++slot)
     {
         const auto p = audioProcessor.getBandParams (slot);
         if (! p.enabled)
             continue;
 
-        sphere::Band b;
+        Band b;
         b.id = slot;
-        b.lat = sphere::freqToLat (p.freq);
+        b.lat = freqToLat (p.freq);
         b.lon = p.posDeg / degreesPerRadian;
         b.gainDb = p.gainDb;
         b.q = p.q;
@@ -305,26 +306,26 @@ sphere::BandSet _3DQAudioProcessorEditor::getBandsFromProcessor() const
     return result;
 }
 
-void _3DQAudioProcessorEditor::readLiveAudio (SphereView::LiveAudio& live)
+void ThreeDQEditor::readLiveAudio (SphereView::LiveAudio& live)
 {
     audioProcessor.copyRecentOutput (recentLeft.data(), recentRight.data(), StereoSpectrum::fftSize);
     live.spectrum = spectrum.analyse (recentLeft.data(), recentRight.data(), audioProcessor.getAnalysisSampleRate());
 
-    for (int i = 0; i < threedq::maxBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
         live.gainDb[(size_t) i]  = audioProcessor.getLiveGainDb (i);
         live.levelDb[(size_t) i] = audioProcessor.getLiveLevelDb (i);
     }
 }
 
-void _3DQAudioProcessorEditor::parameterChanged (const juce::String&, float)
+void ThreeDQEditor::parameterChanged (const juce::String&, float)
 {
     // May arrive on the audio thread (host automation); just flag it.
     if (! applyingSphereEdit)
         hostChangedBands = true;
 }
 
-void _3DQAudioProcessorEditor::timerCallback()
+void ThreeDQEditor::timerCallback()
 {
     auto& bank = audioProcessor.presets;
     const auto sessionName = sessionPresetName();
@@ -345,18 +346,20 @@ void _3DQAudioProcessorEditor::timerCallback()
         if (auto* peer = getPeer(); peer != nullptr && juce::PluginHostType().isReaper())
         {
             const auto scale = peer->getPlatformScaleFactor();
-            threedq::keepHostWindowLargeEnough (peer->getNativeHandle(), juce::roundToInt (minimumWidth * scale), juce::roundToInt (minimumHeight * scale));
+            keepHostWindowLargeEnough (peer->getNativeHandle(), juce::roundToInt (minimumWidth * scale), juce::roundToInt (minimumHeight * scale));
         }
     }
 }
 
 //==============================================================================
-void _3DQAudioProcessorEditor::paint (juce::Graphics& g)
+void ThreeDQEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff111110));
 }
 
-void _3DQAudioProcessorEditor::resized()
+void ThreeDQEditor::resized()
 {
     sphereView.setBounds (getLocalBounds());
 }
+
+} // namespace threedq

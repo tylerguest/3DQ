@@ -1,7 +1,7 @@
 /*
   ==============================================================================
 
-    This file contains the basic framework code for a JUCE plugin processor.
+    ThreeDQProcessor: see PluginProcessor.h.
 
   ==============================================================================
 */
@@ -9,21 +9,16 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-//==============================================================================
-_3DQAudioProcessor::_3DQAudioProcessor()
-#ifndef JucePlugin_PreferredChannelConfigurations
-     : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       ),
-#endif
+namespace threedq
+{
+
+ThreeDQProcessor::ThreeDQProcessor()
+    : AudioProcessor (BusesProperties()
+                        .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       state (*this, nullptr, "ThreeDQ", createParameterLayout()) // XML tag names can't start with a digit
 {
-    for (int i = 0; i < threedq::maxBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
         const auto ids = getBandParamIDs (i);
         auto& p = bandParams[(size_t) i];
@@ -42,16 +37,15 @@ _3DQAudioProcessor::_3DQAudioProcessor()
 }
 
 //==============================================================================
-_3DQAudioProcessor::BandParamIDs _3DQAudioProcessor::getBandParamIDs (int slot)
+ThreeDQProcessor::BandParamIDs ThreeDQProcessor::getBandParamIDs (int slot)
 {
     const auto prefix = "band" + juce::String (slot + 1) + "_";
     return { prefix + "on", prefix + "freq", prefix + "gain", prefix + "q", prefix + "pos", prefix + "mute",
              prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope", prefix + "stereo" };
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout _3DQAudioProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createParameterLayout()
 {
-    using namespace threedq;
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
     auto logRange = [] (float lo, float hi)
@@ -101,123 +95,40 @@ juce::AudioProcessorValueTreeState::ParameterLayout _3DQAudioProcessor::createPa
     return layout;
 }
 
-threedq::BandParams _3DQAudioProcessor::getBandParams (int slot) const
+BandParams ThreeDQProcessor::getBandParams (int slot) const
 {
     const auto& p = bandParams[(size_t) slot];
-    const auto type = (threedq::FilterType) std::clamp ((int) std::lround (p.type->load()), 0, 4);
-    const auto slopeIndex = std::clamp ((int) std::lround (p.slope->load()), 0, (int) threedq::cutSlopes.size() - 1);
+    const auto type = (FilterType) std::clamp ((int) std::lround (p.type->load()), 0, 4);
+    const auto slopeIndex = std::clamp ((int) std::lround (p.slope->load()), 0, (int) cutSlopes.size() - 1);
     return { p.enabled->load() >= 0.5f, p.freq->load(), p.gain->load(), p.q->load(), p.pos->load(),
-             p.range->load(), p.threshold->load(), type, threedq::cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f };
+             p.range->load(), p.threshold->load(), type, cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f };
 }
 
-bool _3DQAudioProcessor::isBandMuted (int slot) const
+bool ThreeDQProcessor::isBandMuted (int slot) const
 {
     return bandParams[(size_t) slot].mute->load() >= 0.5f;
 }
 
-_3DQAudioProcessor::~_3DQAudioProcessor()
-{
-}
-
 //==============================================================================
-const juce::String _3DQAudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool _3DQAudioProcessor::acceptsMidi() const
-{
-   #if JucePlugin_WantsMidiInput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool _3DQAudioProcessor::producesMidi() const
-{
-   #if JucePlugin_ProducesMidiOutput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool _3DQAudioProcessor::isMidiEffect() const
-{
-   #if JucePlugin_IsMidiEffect
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-double _3DQAudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int _3DQAudioProcessor::getNumPrograms()
-{
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
-}
-
-int _3DQAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void _3DQAudioProcessor::setCurrentProgram (int index)
-{
-}
-
-const juce::String _3DQAudioProcessor::getProgramName (int index)
-{
-    return {};
-}
-
-void _3DQAudioProcessor::changeProgramName (int index, const juce::String& newName)
-{
-}
-
-//==============================================================================
-void _3DQAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void ThreeDQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     eq.prepare (sampleRate);
     analysisSampleRate = sampleRate;
 }
 
-void _3DQAudioProcessor::releaseResources()
+void ThreeDQProcessor::releaseResources()
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
 }
 
-#ifndef JucePlugin_PreferredChannelConfigurations
-bool _3DQAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool ThreeDQProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // 3DQ works on the stereo field, so stereo in/out only.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
-    return true;
-  #endif
+    // 3DQ works on the stereo field, so stereo in, stereo out.
+    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
+        && layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet();
 }
-#endif
 
-void _3DQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ignoreUnused (midiMessages);
     juce::ScopedNoDenormals noDenormals;
@@ -228,7 +139,7 @@ void _3DQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (buffer.getNumChannels() < 2)
         return;
 
-    for (int i = 0; i < threedq::maxBands; ++i)
+    for (int i = 0; i < maxBands; ++i)
     {
         auto p = getBandParams (i);
         p.enabled = p.enabled && ! isBandMuted (i); // muted bands fade out like removed ones
@@ -257,7 +168,7 @@ void _3DQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     analysisWritePos.store ((pos + buffer.getNumSamples()) % analysisRingSize, std::memory_order_release);
 }
 
-void _3DQAudioProcessor::copyRecentOutput (float* left, float* right, int numSamples) const
+void ThreeDQProcessor::copyRecentOutput (float* left, float* right, int numSamples) const
 {
     jassert (numSamples <= analysisRingSize);
     const int end = analysisWritePos.load (std::memory_order_acquire);
@@ -271,33 +182,28 @@ void _3DQAudioProcessor::copyRecentOutput (float* left, float* right, int numSam
 }
 
 //==============================================================================
-bool _3DQAudioProcessor::hasEditor() const
+juce::AudioProcessorEditor* ThreeDQProcessor::createEditor()
 {
-    return true; // (change this to false if you choose to not supply an editor)
-}
-
-juce::AudioProcessorEditor* _3DQAudioProcessor::createEditor()
-{
-    return new _3DQAudioProcessorEditor (*this);
+    return new ThreeDQEditor (*this);
 }
 
 //==============================================================================
-void _3DQAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void ThreeDQProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = state.copyState().createXml())
         copyXmlToBinary (*xml, destData);
 }
 
-void _3DQAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void ThreeDQProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (state.state.getType()))
             state.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
-//==============================================================================
-// This creates new instances of the plugin..
+} // namespace threedq
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new _3DQAudioProcessor();
+    return new threedq::ThreeDQProcessor();
 }

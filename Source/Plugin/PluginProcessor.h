@@ -1,7 +1,8 @@
 /*
   ==============================================================================
 
-    This file contains the basic framework code for a JUCE plugin processor.
+    The 3DQ processor: the band parameters, the EQ, the presets, and the recent
+    output the editor's analyser reads.
 
   ==============================================================================
 */
@@ -9,47 +10,46 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereEq.h"
-#include "PresetBank.h"
+#include "../Dsp/SphereEq.h"
+#include "../Model/PresetBank.h"
 
-//==============================================================================
-/**
-*/
-class _3DQAudioProcessor  : public juce::AudioProcessor
+namespace threedq
+{
+
+class ThreeDQProcessor  : public juce::AudioProcessor
 {
 public:
     //==============================================================================
-    _3DQAudioProcessor();
-    ~_3DQAudioProcessor() override;
+    ThreeDQProcessor();
+    ~ThreeDQProcessor() override = default;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
-   #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
-   #endif
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override;
+    bool hasEditor() const override                     { return true; }
 
     //==============================================================================
-    const juce::String getName() const override;
+    const juce::String getName() const override         { return JucePlugin_Name; }
 
-    bool acceptsMidi() const override;
-    bool producesMidi() const override;
-    bool isMidiEffect() const override;
-    double getTailLengthSeconds() const override;
+    bool acceptsMidi() const override                   { return false; }
+    bool producesMidi() const override                  { return false; }
+    bool isMidiEffect() const override                  { return false; }
+    double getTailLengthSeconds() const override        { return 0.0; }
 
     //==============================================================================
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
-    void changeProgramName (int index, const juce::String& newName) override;
+    // 3DQ's presets live in its own menu, so hosts see a single program.
+    int getNumPrograms() override                       { return 1; }
+    int getCurrentProgram() override                    { return 0; }
+    void setCurrentProgram (int) override               {}
+    const juce::String getProgramName (int) override    { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
 
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -65,7 +65,7 @@ public:
     static BandParamIDs getBandParamIDs (int slot);
 
     // enabled = the slot holds a band (it's on the sphere), regardless of mute.
-    threedq::BandParams getBandParams (int slot) const;
+    BandParams getBandParams (int slot) const;
     bool isBandMuted (int slot) const;
 
     // Plays only what this band works on; -1 = the normal EQ. Not a parameter, so
@@ -81,7 +81,7 @@ public:
 
     // The preset menu, A/B and undo; message thread only. The preset's name is
     // kept with the session in state's "presetName" property.
-    sphere::PresetBank presets;
+    PresetBank presets;
 
     //==============================================================================
     // Recent output audio for the GUI's analyser. The audio thread writes into a
@@ -107,18 +107,20 @@ private:
         std::atomic<float>* range = nullptr;
         std::atomic<float>* threshold = nullptr;
         std::atomic<float>* type = nullptr;  // choice index: Peak, Low cut, High cut, Low shelf, High shelf
-        std::atomic<float>* slope = nullptr; // choice index into threedq::cutSlopes
+        std::atomic<float>* slope = nullptr; // choice index into cutSlopes
         std::atomic<float>* stereo = nullptr;
     };
 
-    std::array<BandParamPointers, threedq::maxBands> bandParams;
+    std::array<BandParamPointers, maxBands> bandParams;
 
     std::array<std::array<float, analysisRingSize>, 2> analysisRing {};
     std::atomic<int> analysisWritePos { 0 };
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
-    threedq::SphereEq eq;
+    dsp::SphereEq eq;
 
     //==============================================================================
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (_3DQAudioProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThreeDQProcessor)
 };
+
+} // namespace threedq

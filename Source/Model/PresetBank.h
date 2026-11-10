@@ -11,10 +11,10 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SphereModel.h"
-#include "PresetBar.h"
+#include "Bands.h"
+#include "PresetTypes.h"
 
-namespace sphere
+namespace threedq
 {
 
 class PresetBank
@@ -48,7 +48,7 @@ public:
     static bool isReservedName (const juce::String& name);
     static juce::String legalName (const juce::String& name);
 
-    PresetBarInfo info() const;
+    PresetInfo info() const;
 
 private:
     struct Setup
@@ -75,4 +75,4 @@ private:
     bool synced = false;
 };
 
-} // namespace sphere
+} // namespace threedq

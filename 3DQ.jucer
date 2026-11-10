@@ -6,34 +6,48 @@
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
   <MAINGROUP id="DP2GGJ" name="3DQ">
     <GROUP id="{82879196-947C-66BA-0F0F-99E2CB73AD5C}" name="Source">
-      <FILE id="ZPzw5W" name="PluginProcessor.cpp" compile="1" resource="0"
-            file="Source/PluginProcessor.cpp"/>
-      <FILE id="bt3VZ7" name="PluginProcessor.h" compile="0" resource="0"
-            file="Source/PluginProcessor.h"/>
-      <FILE id="My2EPs" name="PluginEditor.cpp" compile="1" resource="0"
-            file="Source/PluginEditor.cpp"/>
-      <FILE id="Z9APyL" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
-      <FILE id="sEqHdr" name="SphereEq.h" compile="0" resource="0" file="Source/SphereEq.h"/>
-      <FILE id="stSpec" name="StereoSpectrum.h" compile="0" resource="0"
-            file="Source/StereoSpectrum.h"/>
-      <FILE id="sphMdl" name="SphereModel.h" compile="0" resource="0" file="Source/SphereModel.h"/>
-      <FILE id="sphFdH" name="SphereField.h" compile="0" resource="0" file="Source/SphereField.h"/>
-      <FILE id="sphFdC" name="SphereField.cpp" compile="1" resource="0" file="Source/SphereField.cpp"/>
-      <FILE id="sprRnH" name="SpriteRenderer.h" compile="0" resource="0"
-            file="Source/SpriteRenderer.h"/>
-      <FILE id="sprRnC" name="SpriteRenderer.cpp" compile="1" resource="0"
-            file="Source/SpriteRenderer.cpp"/>
-      <FILE id="sphUiH" name="SphereUi.h" compile="0" resource="0" file="Source/SphereUi.h"/>
-      <FILE id="bndPnH" name="BandPanel.h" compile="0" resource="0" file="Source/BandPanel.h"/>
-      <FILE id="bndPnC" name="BandPanel.cpp" compile="1" resource="0" file="Source/BandPanel.cpp"/>
-      <FILE id="prsBrH" name="PresetBar.h" compile="0" resource="0" file="Source/PresetBar.h"/>
-      <FILE id="prsBrC" name="PresetBar.cpp" compile="1" resource="0" file="Source/PresetBar.cpp"/>
-      <FILE id="prsBkH" name="PresetBank.h" compile="0" resource="0" file="Source/PresetBank.h"/>
-      <FILE id="prsBkC" name="PresetBank.cpp" compile="1" resource="0" file="Source/PresetBank.cpp"/>
-      <FILE id="hstWnH" name="HostWindow.h" compile="0" resource="0" file="Source/HostWindow.h"/>
-      <FILE id="hstWnC" name="HostWindow.cpp" compile="1" resource="0" file="Source/HostWindow.cpp"/>
-      <FILE id="sphVwH" name="SphereView.h" compile="0" resource="0" file="Source/SphereView.h"/>
-      <FILE id="sphVwC" name="SphereView.cpp" compile="1" resource="0" file="Source/SphereView.cpp"/>
+      <GROUP id="grpPlugin" name="Plugin">
+        <FILE id="05086d" name="PluginProcessor.h" compile="0" resource="0" file="Source/Plugin/PluginProcessor.h"/>
+        <FILE id="66cc88" name="PluginProcessor.cpp" compile="1" resource="0" file="Source/Plugin/PluginProcessor.cpp"/>
+        <FILE id="afadc5" name="PluginEditor.h" compile="0" resource="0" file="Source/Plugin/PluginEditor.h"/>
+        <FILE id="a21022" name="PluginEditor.cpp" compile="1" resource="0" file="Source/Plugin/PluginEditor.cpp"/>
+        <FILE id="2ae14d" name="HostWindow.h" compile="0" resource="0" file="Source/Plugin/HostWindow.h"/>
+        <FILE id="9fbd31" name="HostWindow.cpp" compile="1" resource="0" file="Source/Plugin/HostWindow.cpp"/>
+      </GROUP>
+      <GROUP id="grpDsp" name="Dsp">
+        <FILE id="c9ee90" name="EqParams.h" compile="0" resource="0" file="Source/Dsp/EqParams.h"/>
+        <FILE id="611dc9" name="FilterDesign.h" compile="0" resource="0" file="Source/Dsp/FilterDesign.h"/>
+        <FILE id="3cbc62" name="SphereEq.h" compile="0" resource="0" file="Source/Dsp/SphereEq.h"/>
+        <FILE id="2c113c" name="StereoSpectrum.h" compile="0" resource="0" file="Source/Dsp/StereoSpectrum.h"/>
+      </GROUP>
+      <GROUP id="grpModel" name="Model">
+        <FILE id="6ce0d6" name="Bands.h" compile="0" resource="0" file="Source/Model/Bands.h"/>
+        <FILE id="973e94" name="Camera.h" compile="0" resource="0" file="Source/Model/Camera.h"/>
+        <FILE id="4e13d2" name="PresetTypes.h" compile="0" resource="0" file="Source/Model/PresetTypes.h"/>
+        <FILE id="a99699" name="PresetBank.h" compile="0" resource="0" file="Source/Model/PresetBank.h"/>
+        <FILE id="9e2345" name="PresetBank.cpp" compile="1" resource="0" file="Source/Model/PresetBank.cpp"/>
+      </GROUP>
+      <GROUP id="grpRender" name="Render">
+        <FILE id="77b70d" name="Sprites.h" compile="0" resource="0" file="Source/Render/Sprites.h"/>
+        <FILE id="fee1db" name="SpriteShaders.h" compile="0" resource="0" file="Source/Render/SpriteShaders.h"/>
+        <FILE id="d08cd1" name="SpriteRenderer.h" compile="0" resource="0" file="Source/Render/SpriteRenderer.h"/>
+        <FILE id="f5c3e7" name="SpriteRenderer.cpp" compile="1" resource="0" file="Source/Render/SpriteRenderer.cpp"/>
+        <FILE id="919b36" name="SphereField.h" compile="0" resource="0" file="Source/Render/SphereField.h"/>
+        <FILE id="6aa634" name="SphereField.cpp" compile="1" resource="0" file="Source/Render/SphereField.cpp"/>
+        <FILE id="0b342b" name="BandRings.cpp" compile="1" resource="0" file="Source/Render/BandRings.cpp"/>
+      </GROUP>
+      <GROUP id="grpUi" name="Ui">
+        <FILE id="3292c1" name="Theme.h" compile="0" resource="0" file="Source/Ui/Theme.h"/>
+        <FILE id="c97b36" name="BandPanel.h" compile="0" resource="0" file="Source/Ui/BandPanel.h"/>
+        <FILE id="c5650f" name="BandPanel.cpp" compile="1" resource="0" file="Source/Ui/BandPanel.cpp"/>
+        <FILE id="5b479b" name="PresetBar.h" compile="0" resource="0" file="Source/Ui/PresetBar.h"/>
+        <FILE id="cab263" name="PresetBar.cpp" compile="1" resource="0" file="Source/Ui/PresetBar.cpp"/>
+        <FILE id="b929ac" name="SphereView.h" compile="0" resource="0" file="Source/Ui/SphereView.h"/>
+        <FILE id="aca81e" name="SphereView.cpp" compile="1" resource="0" file="Source/Ui/SphereView.cpp"/>
+        <FILE id="0bb689" name="SphereViewDetail.h" compile="0" resource="0" file="Source/Ui/SphereViewDetail.h"/>
+        <FILE id="457bb1" name="SphereViewInput.cpp" compile="1" resource="0" file="Source/Ui/SphereViewInput.cpp"/>
+        <FILE id="30ef25" name="SphereViewOverlay.cpp" compile="1" resource="0" file="Source/Ui/SphereViewOverlay.cpp"/>
+      </GROUP>
     </GROUP>
   </MAINGROUP>
   <MODULES>
