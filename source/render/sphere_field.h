@@ -4,6 +4,9 @@
     SphereField: the sphere's particles. The surface's shape is the EQ alone;
     a dot's size and brightness are the audio at its frequency and stereo
     position, and it turns orange or red where the EQ is changing real signal.
+    That changed audio also shows as a layer of its own: it lifts off the
+    surface where the EQ boosts and sinks into the sphere where it cuts, moving
+    with the music.
     Each frame it advances the springs and writes every glowing dot to a
     SpriteList. It knows nothing about the graphics API, so another backend can
     draw the same list by replacing SpriteRenderer alone. The band rings are in
@@ -60,6 +63,7 @@ private:
     std::vector<float> pX, pY, pZ, pShell, pSize, pTwinkle, pTwinkleRate, pMid, pFreq, pCosLon, pSinLon, specPos, lonPos;
     std::vector<int> pColour, drawOrder; // drawOrder: the far half first, so nearer balls cover it
     std::vector<float> springOffset, springVelocity;
+    std::vector<float> layerLift; // the affected-audio layer: + lifting off (boost), - sinking in (cut)
 
     std::vector<SpriteStyle> particleStyles, boostRingStyles, cutRingStyles;
     SpriteStyle midStyle {};

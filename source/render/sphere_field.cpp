@@ -123,6 +123,13 @@ constexpr float quietAlpha = 0.4f, loudAlpha = 1.5f, quietSize = 0.75f, loudSize
 constexpr float tintFullDb = 12.0f;
 constexpr float tintFloor = 0.25f, tintWidth = 0.3f;
 
+// The affected-audio layer: how far it leaves the surface at full strength (in
+// sphere radii), how quickly it follows the music (s), and how bright it is.
+constexpr float layerTravelOut = 0.24f, layerTravelIn = 0.36f; // a cut sinks further, to show through the dent
+constexpr float layerAttack = 0.06f, layerRelease = 0.5f;
+constexpr float layerAlpha = 1.1f;
+constexpr float layerShown = 0.015f; // weaker than this, it isn't drawn
+
 float randomFloat()
 {
     static thread_local juce::Random random;
@@ -153,7 +160,7 @@ void SphereField::buildParticles()
     const auto n = (size_t) numParticles;
 
     for (auto* v : { &pX, &pY, &pZ, &pShell, &pSize, &pTwinkle, &pTwinkleRate, &pMid, &pFreq, &pCosLon, &pSinLon,
-                     &specPos, &lonPos, &springOffset, &springVelocity })
+                     &specPos, &lonPos, &springOffset, &springVelocity, &layerLift })
         v->assign (n, 0.0f);
 
     pColour.assign (n, 0);
@@ -429,6 +436,21 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     const float cosYaw = camera.cosYaw, sinYaw = camera.sinYaw, cosPitch = camera.cosPitch, sinPitch = camera.sinPitch;
     const float sizeBase = particleSize * rPx * 0.05f;
 
+    struct Projected { float x, y, z, persp, sx, sy; };
+    auto project = [&] (float dx, float dy, float dz, float r)
+    {
+        const float mx = dx * r, my = dy * r, mz = dz * r;
+        const float x1 = mx * cosYaw + mz * sinYaw;
+        const float z1 = -mx * sinYaw + mz * cosYaw;
+        const float vy = my * cosPitch - z1 * sinPitch;
+        const float z = my * sinPitch + z1 * cosPitch;
+        const float persp = cameraDistance / (cameraDistance - z);
+        return Projected { x1, vy, z, persp, cx + x1 * rPx * persp, cy - vy * rPx * persp };
+    };
+
+    const float layerAttackK = 1.0f - std::exp (-dt / layerAttack);
+    const float layerReleaseK = 1.0f - std::exp (-dt / layerRelease);
+
     auto towardsViewer = [&] (size_t s) { return pY[s] * sinPitch + (pZ[s] * cosYaw - pX[s] * sinYaw) * cosPitch; };
 
     int backCount = 0, frontStart = firstExtraPoint, drawCount = firstExtraPoint;
@@ -521,6 +543,18 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         {
             springOffset[n] = disp;
             springVelocity[n] = 0;
+            layerLift[n] = 0;
+        }
+
+        // The layer follows the changed audio: out fast with a hit, back slowly.
+        const float layerTarget = disp > 0 ? tint : -tint;
+        float lift = layerLift[n];
+        if (layerTarget != 0 || lift != 0)
+        {
+            lift += (layerTarget - lift) * (std::abs (layerTarget) > std::abs (lift) ? layerAttackK : layerReleaseK);
+            if (layerTarget == 0 && std::abs (lift) < 1.0e-3f)
+                lift = 0;
+            layerLift[n] = lift;
         }
 
         float offset = springOffset[n], velocity = springVelocity[n];
@@ -548,14 +582,8 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
         // The floor stops a spring overshoot flipping a point through the centre.
         const float r = std::max (0.05f, surface);
-        const float mx = dx * r, my = dy * r, mz = dz * r;
-        const float x1 = mx * cosYaw + mz * sinYaw;
-        const float z1 = -mx * sinYaw + mz * cosYaw;
-        const float vy = my * cosPitch - z1 * sinPitch;
-        const float z = my * sinPitch + z1 * cosPitch;
-        const float persp = cameraDistance / (cameraDistance - z);
-        const float sx = cx + x1 * rPx * persp;
-        const float sy = cy - vy * rPx * persp;
+        const auto view = project (dx, dy, dz, r);
+        const float x1 = view.x, vy = view.y, z = view.z, persp = view.persp, sx = view.sx, sy = view.sy;
 
         // The far side fades and shrinks so the front reads clearly through it.
         const float front = std::clamp ((z + 0.7f) / 1.4f, 0.0f, 1.0f);
@@ -581,6 +609,28 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
         if (pMid[n] > 0)
             out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);
+
+        // The affected audio, as a layer leaving the surface: out where it's
+        // boosted, in where it's cut, in pure boost or cut colour. A fainter dot
+        // halfway gives the layer depth as it separates.
+        if (std::abs (lift) > layerShown)
+        {
+            const float strength = std::abs (lift);
+            const auto& layerStyle = particleStyles[(size_t) (pColour[n] * numTints + (lift > 0 ? tintSteps : 2 * tintSteps))];
+            const float baseAlpha = extraFade * particleAlpha * layerAlpha * twinkle * std::min (1.0f, strength * 1.6f);
+
+            for (const auto [along, alpha, scale] : { std::tuple { 1.0f, 1.0f, 0.95f }, std::tuple { 0.5f, 0.35f, 0.8f } })
+            {
+                const float rl = std::max (0.05f, r + lift * (lift > 0 ? layerTravelOut : layerTravelIn) * along);
+                const auto lv = project (dx, dy, dz, rl);
+                const float lFront = std::clamp ((lv.z + 0.7f) / 1.4f, 0.0f, 1.0f);
+                const float lDepth = lFront * lFront * (3.0f - 2.0f * lFront);
+                // Inside the sphere it's seen through the surface, so dimmer.
+                const float inside = lift < 0 ? 0.7f : 1.0f;
+                out.add (layerStyle, lv.sx, lv.sy, sizeBase * pSize[n] * lv.persp * audioSize * scale * (0.75f + 0.25f * lDepth),
+                         baseAlpha * alpha * inside * (0.1f + 0.9f * lDepth));
+            }
+        }
     }
 
     const auto dirs = directionsOf (bands);
