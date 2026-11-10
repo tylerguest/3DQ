@@ -18,11 +18,6 @@ constexpr const char* presetExtension = ".3dqpreset";
 constexpr double editRunSeconds = 0.5;
 constexpr size_t maxUndoSteps = 200;
 
-juce::File presetFolder()
-{
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("3DQ").getChildFile ("Presets");
-}
-
 double nowSeconds()    { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }
 
 bool sameBands (const BandSet& a, const BandSet& b)
@@ -105,7 +100,18 @@ std::optional<BandSet> fromXml (const juce::XmlElement* root)
 }
 }
 
+juce::File PresetBank::defaultFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("3DQ").getChildFile ("Presets");
+}
+
 PresetBank::PresetBank()
+    : PresetBank (Storage {})
+{
+}
+
+PresetBank::PresetBank (Storage s)
+    : storage (std::move (s))
 {
     slots[0].now.name = slots[1].now.name = defaultPresetName;
     slots[0].now.saved = slots[1].now.saved = BandSet {};
@@ -124,7 +130,7 @@ bool PresetBank::isReservedName (const juce::String& name)
 
 juce::File PresetBank::fileFor (const juce::String& name) const
 {
-    return presetFolder().getChildFile (legalName (name) + presetExtension);
+    return storage.folder.getChildFile (legalName (name) + presetExtension);
 }
 
 bool PresetBank::exists (const juce::String& name) const
@@ -136,7 +142,7 @@ void PresetBank::rescan()
 {
     juce::StringArray found;
 
-    for (const auto& file : presetFolder().findChildFiles (juce::File::findFiles, false, juce::String ("*") + presetExtension))
+    for (const auto& file : storage.folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + presetExtension))
         found.add (file.getFileNameWithoutExtension());
 
     found.sortNatural();
@@ -197,7 +203,7 @@ void PresetBank::edited (const BandSet& bands)
         return;
     }
 
-    const auto time = nowSeconds();
+    const auto time = currentTime();
 
     if (time - lastEdit > editRunSeconds)
         remember();
@@ -315,7 +321,9 @@ bool PresetBank::remove (int index)
 
     const auto removed = names[index];
 
-    if (! fileFor (removed).moveToTrash())
+    const auto file = fileFor (removed);
+
+    if (! (storage.removeToTrash ? file.moveToTrash() : file.deleteFile()))
         return false;
 
     for (auto& slot : slots)
@@ -324,6 +332,11 @@ bool PresetBank::remove (int index)
 
     rescan();
     return true;
+}
+
+double PresetBank::currentTime() const
+{
+    return storage.clock ? storage.clock() : nowSeconds();
 }
 
 PresetInfo PresetBank::info() const

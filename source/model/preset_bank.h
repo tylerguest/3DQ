@@ -20,7 +20,20 @@ namespace threedq
 class PresetBank
 {
 public:
+    // Where presets live, and how the bank reads the time and removes files.
+    // The defaults are the real ones; tests point them elsewhere.
+    struct Storage
+    {
+        juce::File folder = defaultFolder();
+        std::function<double()> clock;  // seconds; empty = the system clock
+        bool removeToTrash = true;      // false = delete outright
+    };
+
+    // <user application data>/3DQ/Presets
+    static juce::File defaultFolder();
+
     PresetBank();
+    explicit PresetBank (Storage storage);
 
     // The editor opened, or the session's bands or preset name changed under us.
     void syncFromHost (const BandSet& bands, const juce::String& sessionName);
@@ -41,7 +54,7 @@ public:
     bool step (int direction);    // loads the next or previous preset, wrapping round
     bool save();                  // false = couldn't write
     bool saveAs (const juce::String& name);
-    bool remove (int index);      // moves the file to the trash
+    bool remove (int index);      // moves the file to the trash (see Storage)
 
     void rescan();
     bool exists (const juce::String& name) const;
@@ -67,7 +80,9 @@ private:
     void remember();
     void replaceNow (Setup);
     juce::File fileFor (const juce::String& name) const;
+    double currentTime() const;
 
+    Storage storage;
     std::array<Slot, 2> slots;
     size_t active = 0;
     juce::StringArray names;

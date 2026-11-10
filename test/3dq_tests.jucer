@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="tdqTst" name="3dq_tests" projectType="consoleapp" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1"
+              defines="JucePlugin_Name=&quot;3DQ&quot;">
+  <MAINGROUP id="tdqMain" name="3dq_tests">
+    <GROUP id="tdqTest" name="test">
+      <FILE id="118fcb" name="main.cpp" compile="1" resource="0" file="main.cpp"/>
+      <FILE id="c5ba73" name="test_helpers.h" compile="0" resource="0" file="test_helpers.h"/>
+      <FILE id="103f7a" name="test_filter_design.cpp" compile="1" resource="0" file="test_filter_design.cpp"/>
+      <FILE id="ee4182" name="test_sphere_eq.cpp" compile="1" resource="0" file="test_sphere_eq.cpp"/>
+      <FILE id="aeb060" name="test_stereo_spectrum.cpp" compile="1" resource="0" file="test_stereo_spectrum.cpp"/>
+      <FILE id="974bc1" name="test_bands.cpp" compile="1" resource="0" file="test_bands.cpp"/>
+      <FILE id="704d27" name="test_camera.cpp" compile="1" resource="0" file="test_camera.cpp"/>
+      <FILE id="f621f0" name="test_preset_bank.cpp" compile="1" resource="0" file="test_preset_bank.cpp"/>
+      <FILE id="815c3d" name="test_processor.cpp" compile="1" resource="0" file="test_processor.cpp"/>
+    </GROUP>
+    <GROUP id="tdqSrc" name="source">
+      <FILE id="a7f38d" name="preset_bank.cpp" compile="1" resource="0" file="../source/model/preset_bank.cpp"/>
+      <FILE id="1960d5" name="host_window.cpp" compile="1" resource="0" file="../source/plugin/host_window.cpp"/>
+      <FILE id="b54823" name="plugin_editor.cpp" compile="1" resource="0" file="../source/plugin/plugin_editor.cpp"/>
+      <FILE id="56e7ed" name="plugin_processor.cpp" compile="1" resource="0" file="../source/plugin/plugin_processor.cpp"/>
+      <FILE id="17c258" name="band_rings.cpp" compile="1" resource="0" file="../source/render/band_rings.cpp"/>
+      <FILE id="3f3d67" name="sphere_field.cpp" compile="1" resource="0" file="../source/render/sphere_field.cpp"/>
+      <FILE id="9863e8" name="sprite_renderer.cpp" compile="1" resource="0" file="../source/render/sprite_renderer.cpp"/>
+      <FILE id="9c22b4" name="band_panel.cpp" compile="1" resource="0" file="../source/ui/band_panel.cpp"/>
+      <FILE id="582e1d" name="preset_bar.cpp" compile="1" resource="0" file="../source/ui/preset_bar.cpp"/>
+      <FILE id="e8960d" name="sphere_view.cpp" compile="1" resource="0" file="../source/ui/sphere_view.cpp"/>
+      <FILE id="213bdb" name="sphere_view_input.cpp" compile="1" resource="0" file="../source/ui/sphere_view_input.cpp"/>
+      <FILE id="7c0299" name="sphere_view_overlay.cpp" compile="1" resource="0" file="../source/ui/sphere_view_overlay.cpp"/>
+    </GROUP>
+  </MAINGROUP>
+  <MODULES>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+    <MODULE id="juce_opengl" showAllCode="1" useLocalCopy="0" useGlobalPath="0"/>
+  </MODULES>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" JUCE_WEB_BROWSER="0" JUCE_USE_CURL="0"/>
+  <EXPORTFORMATS>
+    <LINUX_MAKE targetFolder="builds/linux_makefile">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="3dq_tests"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="3dq_tests"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="../modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../modules"/>
+        <MODULEPATH id="juce_audio_processors" path="../modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="../modules"/>
+        <MODULEPATH id="juce_core" path="../modules"/>
+        <MODULEPATH id="juce_data_structures" path="../modules"/>
+        <MODULEPATH id="juce_dsp" path="../modules"/>
+        <MODULEPATH id="juce_events" path="../modules"/>
+        <MODULEPATH id="juce_graphics" path="../modules"/>
+        <MODULEPATH id="juce_gui_basics" path="../modules"/>
+        <MODULEPATH id="juce_gui_extra" path="../modules"/>
+        <MODULEPATH id="juce_opengl" path="../modules"/>
+      </MODULEPATHS>
+    </LINUX_MAKE>
+  </EXPORTFORMATS>
+</JUCERPROJECT>
