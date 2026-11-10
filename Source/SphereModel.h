@@ -8,8 +8,6 @@
       gain      -> bump out of (boost) or dent into (cut) the surface
       q         -> how wide the bump is
 
-    Same maths as ui/src/bands.ts, which drives the browser preview.
-
   ==============================================================================
 */
 

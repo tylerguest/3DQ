@@ -2,10 +2,6 @@
 Builds/
 JuceLibraryCode/
 
-# Web UI: dependencies and bundle output
-ui/node_modules/
-ui/build/
-
 # Logs and local clutter
 *.log
 .DS_Store

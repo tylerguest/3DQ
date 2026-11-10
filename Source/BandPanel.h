@@ -5,7 +5,7 @@
     stereo / mono, solo, mute, remove, and a knob for each of the band's settings.
 
     Layout, hit-testing and value mapping are here, with drawing. SphereView
-    owns the gestures and the shared state. Same maths as ui/src/bandPanel.ts.
+    owns the gestures and the shared state.
     The panel is laid out at its default-window size and scaled up as a whole
     with the window; BandPanelLayout's rectangles are in those unscaled units.
 

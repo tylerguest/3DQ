@@ -10,8 +10,6 @@
       - When the host changes band parameters (automation, preset load, undo),
         the editor pushes the processor's bands back to the sphere.
 
-    The browser preview in ui/ is separate: it isn't part of the plugin.
-
   ==============================================================================
 */
 

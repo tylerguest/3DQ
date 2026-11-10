@@ -3,7 +3,7 @@
 
     PresetBank: the presets on disk, the A and B setups, and the undo history of
     each. Lives in the processor so it outlasts the editor window. Message
-    thread only. The browser's equivalent is ui/src/presets.ts.
+    thread only.
 
   ==============================================================================
 */

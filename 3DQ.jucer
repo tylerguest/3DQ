@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="yep1WR" name="3DQ" projectType="audioplug" useAppConfig="0"
+              companyName="4KDSP" pluginManufacturer="4KDSP" pluginManufacturerCode="Kdsp"
+              pluginCode="Tdq3" bundleIdentifier="com.4kdsp.3dq" companyWebsite=" "
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
   <MAINGROUP id="DP2GGJ" name="3DQ">
     <GROUP id="{82879196-947C-66BA-0F0F-99E2CB73AD5C}" name="Source">

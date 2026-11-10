@@ -91,7 +91,7 @@ void main()
 
 // Graphite, lit softly behind the shape, darker toward the corners, with a soft
 // shadow under it. The haze puts lows, mids and highs at the heights they have
-// on the sphere. Matches ui/src/backdrop.ts.
+// on the sphere.
 const char* const backdropFragmentShader = R"(#version 150
 uniform vec2 uViewport;
 uniform vec3 uLight;  // x, y of the shape's middle, sphere radius

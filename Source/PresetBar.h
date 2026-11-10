@@ -5,7 +5,7 @@
     its menu for saving and loading, and undo, redo, A/B and copy on the right.
 
     Layout, hit-testing and drawing are here. SphereView owns the gestures and
-    the editor carries out the commands. Same maths as ui/src/presetBar.ts.
+    the editor carries out the commands.
     Rectangles are in unscaled units, as in BandPanelLayout.
 
   ==============================================================================

@@ -14,7 +14,6 @@
         pos  -90°  -> L
 
     Per band:  c = u·x,  x' = x + u · (H(c) - c).  Bands run in series.
-    This matches the browser preview in ui/src/audioPreview.ts.
 
     Dynamic bands (range != 0): the band listens to its own component c through
     a band-pass at its frequency and Q. When that level goes over the threshold,
@@ -56,7 +55,7 @@ namespace threedq
 constexpr int   maxBands  = 12;
 constexpr float minFreq   = 20.0f;
 constexpr float maxFreq   = 20000.0f;
-constexpr float maxGainDb = 30.0f; // must match MAX_GAIN_DB in ui/src/bands.ts
+constexpr float maxGainDb = 30.0f;
 constexpr float minQ      = 0.3f;
 constexpr float maxQ      = 10.0f;
 constexpr float maxShelfQ = 2.0f; // higher resonates far past the shelf's own gain

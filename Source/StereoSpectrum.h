@@ -9,8 +9,7 @@
     density joined by straight lines (so bands narrower than a bin, at the low
     end, still differ smoothly from their neighbours). The GUI turns these into the energy
     along each particle's stereo axis. Scaling matches Web Audio's AnalyserNode
-    (Blackman window, magnitudes divided by the FFT size), so the plugin and the
-    browser preview look the same. Mirrors ui/src/spectrum.ts.
+    (Blackman window, magnitudes divided by the FFT size).
 
   ==============================================================================
 */
@@ -67,7 +66,7 @@ public:
 
 private:
     // Integral of per-bin values over [a, b] (in bins), joining the bins with
-    // straight lines. Mirrors integrateBins in ui/src/spectrum.ts.
+    // straight lines.
     static double integrate (const std::vector<double>& bins, double a, double b)
     {
         const int n = (int) bins.size();

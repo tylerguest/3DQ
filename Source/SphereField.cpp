@@ -1,8 +1,7 @@
 /*
   ==============================================================================
 
-    SphereField: see SphereField.h. The look and motion here are the same as the
-    browser preview's (ui/src/Sphere.tsx).
+    SphereField: see SphereField.h.
 
   ==============================================================================
 */
