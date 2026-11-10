@@ -321,6 +321,11 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
 
 void SphereView::mouseDown (const juce::MouseEvent& e)
 {
+    {
+        const std::lock_guard lock (stateLock);
+        state.clicked = true;
+    }
+
     presetTookPress = presetMouseDown (e);
 
     if (presetTookPress || overHelpButton (e.position) || panelMouseDown (e))

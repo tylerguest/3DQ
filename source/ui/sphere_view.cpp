@@ -341,10 +341,13 @@ void SphereView::renderOpenGL()
             state.liveLevelDb[(size_t) b.id] = live.levelDb[(size_t) b.id];
         }
 
-        // Inertia after a drag, then a slow auto-rotation that only runs while
-        // the pointer is away. It stops quickly and eases back in slowly.
-        const bool holding = state.rotating || state.dragged >= 0 || state.hovered >= 0;
-        const float autoTarget = ! state.pointerInside && ! holding && frameStart - state.lastInteraction > autoResumeDelay ? 1.0f : 0.0f;
+        // Inertia after a drag, then a slow auto-rotation that keeps going
+        // until the user clicks. After a click it resumes once the pointer has
+        // left the window for a moment. It stops quickly and eases back in slowly.
+        const bool holding = state.rotating || state.dragged >= 0;
+        if (state.clicked && ! state.pointerInside && ! holding && frameStart - state.lastInteraction > autoResumeDelay)
+            state.clicked = false;
+        const float autoTarget = state.clicked ? 0.0f : 1.0f;
         autoBlend += (autoTarget - autoBlend) * (1.0f - std::exp (-dt / (autoTarget > autoBlend ? 1.2f : 0.12f)));
 
         if (! state.rotating)

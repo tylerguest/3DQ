@@ -138,6 +138,7 @@ private:
         int hovered = -1, dragged = -1;
         std::array<float, maxBands> liveLevelDb {};
         double lastInteraction = 0;
+        bool clicked = false; // a click anywhere stops the auto-rotation until the pointer has gone
     };
 
     void newOpenGLContextCreated() override;
