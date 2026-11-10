@@ -23,6 +23,10 @@ inline const juce::Colour pale (255, 252, 244);
 // The window side at which the panel and the on-screen buttons are drawn 1:1.
 constexpr float uiReferenceSize = 520.0f;
 
+// The bottom of the preset bar along the top of the window, in UI points
+// (multiplied by uiScale). Views fitted under it keep clear of it.
+constexpr float presetBarBottom = 40.0f;
+
 // How much the panel and the on-screen buttons grow with the window. It follows
 // the window's smaller side, but more slowly than the window, so they don't
 // dominate a large one. Width and height are in component pixels.

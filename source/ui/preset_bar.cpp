@@ -15,6 +15,7 @@ namespace threedq
 namespace
 {
 constexpr float barTop = 12.0f, barHeight = 28.0f, buttonHeight = 24.0f;
+static_assert (barTop + barHeight == presetBarBottom, "theme.h's presetBarBottom must match the bar");
 constexpr float undoWidth = 24.0f, abWidth = 36.0f, copyWidth = 38.0f, arrowWidth = 20.0f, groupGap = 4.0f;
 constexpr float toolsWidth = undoWidth * 2.0f + groupGap + abWidth + copyWidth;
 constexpr float toolsRightInset = 14.0f, toolsClearance = 8.0f; // from the window's edge, and from the preset selector

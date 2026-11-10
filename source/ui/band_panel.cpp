@@ -194,13 +194,16 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
 
 PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY, SurfaceExtent extent)
 {
-    const float room = height - uiScale (width, height) * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
+    // The space between the preset bar and the panel.
+    const float scale = uiScale (width, height);
+    const float roomTop = scale * presetBarBottom;
+    const float room = height - scale * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
     const float radius = std::min (width, height) * sphereRadiusFraction * zoom;
-    const float fittedRadius = std::min (radius, (room - 2.0f * panelFitMargin) / (extent.top - extent.bottom));
+    const float fittedRadius = std::min (radius, (room - roomTop - 2.0f * panelFitMargin) / (extent.top - extent.bottom));
 
     // Where the sphere's centre sits when the shape touches the top of the
     // space, and the bottom; halfway between centres the shape we actually see.
-    const float highest = panelFitMargin + extent.top * fittedRadius;
+    const float highest = roomTop + panelFitMargin + extent.top * fittedRadius;
     const float lowest = room - panelFitMargin + extent.bottom * fittedRadius;
     const float centre = std::min (std::max ((highest + lowest) / 2.0f + panY, highest), lowest);
     return { fittedRadius / radius, centre - (height / 2.0f + panY) };
