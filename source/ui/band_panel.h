@@ -2,10 +2,10 @@
   ==============================================================================
 
     The band control panel that slides up from the ^ button: filter type,
-    sidechain (SC: the band's dynamics follow the sidechain input), stereo /
-    mono, solo, mute, remove, and a row of knobs for the band's settings. The
-    knobs come in two pages, picked by the EQ and DYN tabs along the bottom:
-    the band's shape, and its dynamics.
+    stereo / mono and its position, solo, mute, remove, and the Freq, Gain and Q knobs.
+    The ring round Gain holds the band's dynamics: drag it for the range, the
+    inner ring for the threshold, and the gear opens ratio, attack,
+    release and the sidechain switch (SC: the dynamics follow the sidechain).
 
     Layout, hit-testing and value mapping are here, with drawing. SphereView
     owns the gestures and the shared state.
@@ -23,40 +23,44 @@
 namespace threedq
 {
 
-constexpr int numPanelKnobs = 6;  // knob slots on a page
 constexpr int numFilterTypes = 5; // indexed by FilterType
-constexpr int numPanelPages = 2;
 
-enum class PanelPage { eq, dynamics };
-
-// What a knob slot controls. The meter shows the band's live dynamic gain
-// change; it can't be turned.
+// What a control sets. Gain is the big knob. Round it are two rings: the outer
+// one is the dynamic range, with the live gain change (the meter) moving along
+// it; the inner one is the threshold, with the level the band hears. Ratio, attack, release and the GR
+// meter are in the dynamics menu, opened from the gear.
 enum PanelKnob { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob, ratioKnob, attackKnob, releaseKnob, liveGainMeter };
 
-PanelKnob panelKnobAt (PanelPage, int slot);
+// A menu that opens over the panel: the filter types, or the dynamics settings.
+enum class PanelPopup { none, types, dynamics };
 
 struct PanelTarget
 {
-    enum class Kind { none, toggle, background, previous, next, type, sidechain, stereo, solo, mute, remove, knob, page };
+    enum class Kind { none, toggle, background, previous, next, typeMenu, type, dynamicsMenu, sidechain, stereo, solo, mute, remove, knob };
 
     Kind kind = Kind::none;
-    int index = 0; // which type, PanelKnob or PanelPage
+    int index = 0;        // which type or PanelKnob
+    bool inPopup = false; // in the open menu, so clicking it keeps the menu open
 
-    bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index; }
+    bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index && inPopup == other.inPopup; }
 };
 
 struct BandPanelLayout
 {
-    juce::Rectangle<float> panel, previous, title, next, sidechain, stereo, solo, mute, remove;
-    std::array<juce::Rectangle<float>, numFilterTypes> types;
-    std::array<juce::Rectangle<float>, numPanelKnobs> knobs; // slots, left to right
-    std::array<juce::Rectangle<float>, numPanelPages> pages;  // the tabs
+    juce::Rectangle<float> panel, previous, title, next, typePill, stereo, positionPill, solo, mute, remove, gear;
+    juce::Point<float> freqCentre, gainCentre, qCentre;
+
+    // The open menu, if any: its area and what's in it.
+    PanelPopup popup = PanelPopup::none;
+    juce::Rectangle<float> popupArea, sidechain, grMeter;
+    std::array<juce::Rectangle<float>, numFilterTypes> typeItems;
+    std::array<juce::Rectangle<float>, 3> dynamicsKnobs; // ratio, attack, release
+
     juce::Point<float> toggleCentre;
     float scale = 1;
-    PanelPage page = PanelPage::eq;
 
     // Window size in component pixels. openAmount: 0 = closed (only the ^ button shows), 1 = fully up.
-    static BandPanelLayout make (float width, float height, float openAmount, PanelPage page);
+    static BandPanelLayout make (float width, float height, float openAmount, PanelPopup popup);
 
     // position is in component pixels.
     PanelTarget hit (juce::Point<float> position, bool open, bool hasBand) const;
@@ -80,7 +84,9 @@ bool knobEnabled (const Band&, int knob);
 bool knobIsStepped (const Band&, int knob);
 
 // sidechainConnected: whether the host is feeding the sidechain input.
+// levelDb: what the band's detector hears now, shown against its threshold.
 void drawBandPanel (juce::Graphics&, const BandPanelLayout&, float dpr, float openAmount,
-                    const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected);
+                    const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
+                    float levelDb);
 
 } // namespace threedq

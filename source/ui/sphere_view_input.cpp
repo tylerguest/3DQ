@@ -150,12 +150,23 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
         const auto target = panelTargetLocked (e.position);
 
         if (target.kind == Kind::none)
-            return false;
+        {
+            // A click anywhere else closes an open menu, and does only that.
+            if (state.panelPopup == PanelPopup::none || ! state.panelOpen)
+                return false;
+            state.panelPopup = PanelPopup::none;
+            return true;
+        }
 
         state.lastInteraction = nowSeconds();
 
         if (! e.mods.isLeftButtonDown())
             return true;
+
+        // Anything but the menu itself, or the button that opened it, closes it.
+        const auto popupBefore = state.panelPopup;
+        if (! target.inPopup)
+            state.panelPopup = PanelPopup::none;
 
         auto* band = state.bands.find (state.selected);
 
@@ -170,10 +181,18 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 break;
             case Kind::previous:  selectNeighbourLocked (-1); break;
             case Kind::next:      selectNeighbourLocked (1); break;
+            case Kind::typeMenu:
+                state.panelPopup = popupBefore == PanelPopup::types ? PanelPopup::none : PanelPopup::types;
+                break;
+            case Kind::dynamicsMenu:
+                if (! band->isCut())
+                    state.panelPopup = popupBefore == PanelPopup::dynamics ? PanelPopup::none : PanelPopup::dynamics;
+                break;
             case Kind::type:
                 band->type = (FilterType) target.index;
                 if (band->isShelf())
                     band->q = std::min (band->q, maxShelfQ);
+                state.panelPopup = PanelPopup::none;
                 changed = true;
                 break;
             case Kind::sidechain:
@@ -183,8 +202,10 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                     changed = true;
                 }
                 break;
-            case Kind::stereo:    band->stereo = ! band->stereo; changed = true; break;
-            case Kind::page:      state.panelPage = (PanelPage) target.index; break;
+            case Kind::stereo:
+                changed = band->stereo != (target.index == 1);
+                band->stereo = target.index == 1;
+                break;
             case Kind::solo:      state.soloLatched = state.soloLatched == band->id ? -1 : band->id; break;
             case Kind::mute:      band->muted = ! band->muted; changed = true; break;
             case Kind::remove:

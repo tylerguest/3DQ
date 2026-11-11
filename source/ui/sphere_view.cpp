@@ -256,7 +256,7 @@ void SphereView::selectNeighbourLocked (int direction)
 
 PanelTarget SphereView::panelTargetLocked (juce::Point<float> position) const
 {
-    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPage);
+    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPopup);
     return layout.hit (position, state.panelOpen, state.bands.find (state.selected) != nullptr);
 }
 
@@ -325,8 +325,9 @@ void SphereView::renderOpenGL()
     int hovered, dragged, selected, soloed, activeKnob;
     bool helpHovered, panelOpen;
     float panelAmount;
-    PanelPage panelPage;
     PanelTarget panelHover;
+    float selectedLevelDb = -120.0f;
+    PanelPopup panelPopup;
     PresetTarget presetHover;
     std::shared_ptr<const PresetInfo> presetInfo;
     bool presetMenuOpen;
@@ -437,10 +438,11 @@ void SphereView::renderOpenGL()
             validateSelectionLocked();
 
         selected = state.selected;
+        selectedLevelDb = selected >= 0 ? state.liveLevelDb[(size_t) selected] : -120.0f;
         soloed = state.soloHeld >= 0 ? state.soloHeld : state.soloLatched;
         panelOpen = state.panelOpen;
         panelHover = state.panelHover;
-        panelPage = state.panelPage;
+        panelPopup = state.panelOpen ? state.panelPopup : PanelPopup::none;
         activeKnob = knobDrag.has_value() ? knobDrag->knob : -1;
 
         const float panelGoal = panelOpen ? 1.0f : 0.0f;
@@ -490,8 +492,8 @@ void SphereView::renderOpenGL()
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
         drawMakerMark (g, camera, panelAmount);
-        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPage), dpr, panelAmount,
-                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain);
+        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup), dpr, panelAmount,
+                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));
         drawPresetBar (g, presetLayout, dpr, *presetInfo, presetHover, presetMenuAmount);

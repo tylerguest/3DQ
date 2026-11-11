@@ -136,7 +136,7 @@ private:
         int selected = -1; // the band last clicked: highlighted, and what the panel controls
         int soloLatched = -1, soloHeld = -1; // from the panel's S button, and Alt+hold on a node
         float panelAmount = 0; // eased 0..1, as the panel slides
-        PanelPage panelPage = PanelPage::eq;
+        PanelPopup panelPopup = PanelPopup::none; // a menu open over the panel
         PanelViewFit panelFit;
         int hovered = -1, dragged = -1;
         std::array<float, maxBands> liveLevelDb {};
