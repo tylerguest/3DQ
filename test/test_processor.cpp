@@ -122,6 +122,7 @@ public:
             for (int band = 1; band <= maxBands; ++band)
                 for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo", "sc", "atk", "rel", "ratio" })
                     expected.add ("band" + juce::String (band) + "_" + name);
+            expected.add ("out");
 
             juce::StringArray actual;
             bool allVersion1 = true;
@@ -132,7 +133,7 @@ public:
                     allVersion1 = allVersion1 && withId->getVersionHint() == 1;
                 }
 
-            expectEquals (actual.size(), 180);
+            expectEquals (actual.size(), 181);
             expect (actual == expected, "IDs or their order changed");
             expect (allVersion1, "every parameter has version hint 1");
         }
@@ -375,6 +376,46 @@ public:
             expect (p->hasSidechainInput());
             juce::Thread::sleep (600);
             expect (! p->hasSidechainInput(), "no blocks for 600 ms: the GUI stops showing a frozen sidechain");
+        }
+
+        beginTest ("Output gain scales the output, gliding to a change");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::outputGainID, -6.0f);
+            const auto in = sine (1000.0, sr, 48000);
+            auto left = in, right = in;
+            run (*p, left, right);
+            expectWithinAbsoluteError (gainDb (in, left), -6.0, 0.05);
+            expectWithinAbsoluteError (gainDb (in, right), -6.0, 0.05);
+
+            set (*p, ThreeDQProcessor::outputGainID, 0.0f);
+            std::vector<float> ones (512, 1.0f), alsoOnes = ones;
+            run (*p, ones, alsoOnes);
+            expectLessThan (ones[0], 0.6f, "it starts from where it was");
+            expectGreaterThan (ones[511], ones[0], "and glides up");
+        }
+
+        beginTest ("Keeps the host's track name and colour");
+        {
+            auto p = makeProcessor();
+            expect (! p->getTrackProperties().name.has_value());
+            juce::AudioProcessor::TrackProperties track;
+            track.name = "Lead Vocal";
+            track.colourARGB = 0xffe8b04au;
+            p->updateTrackProperties (track);
+            expectEquals (p->getTrackProperties().name.value_or (""), juce::String ("Lead Vocal"));
+            expect (p->getTrackProperties().colourARGB == std::optional<juce::uint32> (0xffe8b04au));
+        }
+
+        beginTest ("The meters fall silent soon after the host stops processing");
+        {
+            auto p = makeProcessor();
+            expect (! p->isProcessing(), "nothing processed yet");
+            auto left = sine (1000.0, sr, 4800), right = left;
+            run (*p, left, right);
+            expect (p->isProcessing());
+            juce::Thread::sleep (350);
+            expect (! p->isProcessing(), "no blocks for 350 ms");
         }
 
         beginTest ("Sidechain: the analyser gets the latest sidechain input");

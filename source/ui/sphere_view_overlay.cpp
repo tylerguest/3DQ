@@ -326,6 +326,18 @@ void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
     g.setColour (juce::Colours::white);
     g.fillPath (logo, juce::AffineTransform::scale (height).translated (left, top));
 
+    // The maker's name, after a hairline, quietly level with the logo.
+    const float logoRight = left + logo.getBounds().getRight() * height;
+    const float divider = logoRight + 9.0f * unit, centreY = top + height / 2.0f;
+    g.setColour (warmGrey.withAlpha (0.3f));
+    g.fillRect (divider, centreY - 6.0f * unit, 1.0f * unit, 12.0f * unit);
+
+    auto mark = uiFont (9.0f * unit, true);
+    mark.setExtraKerningFactor (0.22f);
+    g.setFont (mark);
+    g.setColour (warmGrey.withAlpha (0.6f));
+    g.drawSingleLineText ("4KDSP", juce::roundToInt (divider + 9.0f * unit), juce::roundToInt (centreY + mark.getAscent() * 0.38f));
+
     const int x = juce::roundToInt (left), baseline = juce::roundToInt (top + height + 18.0f * unit);
 
     // Solo changes what you hear, so it stays on show with the panel closed.
@@ -338,22 +350,195 @@ void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
     }
 }
 
-// The maker's name, quietly in the bottom-left corner, level with the ? button.
-// It makes way while the band panel is open.
-void SphereView::drawMakerMark (juce::Graphics& g, const Camera& camera, float panelAmount)
+// The bar along the bottom: a strip whose ends lean in, with the host's track
+// in the middle and the output gain at the right. The ? button has the corner
+// beside it.
+void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool outputHot,
+                                const juce::String& trackName, std::optional<juce::Colour> trackColour)
 {
-    const float alpha = 0.36f * (1.0f - panelAmount);
-    if (alpha < 0.005f)
-        return;
+    const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
+    const float w = camera.width, bottom = camera.height;
+    const float top = bottom - bottomBarHeight * unit;
+    const float inset = bottomBarSideInset * unit, slant = bottomBarSlant * unit;
+
+    // A trapezoid, crisp-cornered; the edge is drawn up the ends and along
+    // the top, not along the window's bottom.
+    const auto trapezoid = [&] (float bottomLeft, float topLeft, float topRight, float bottomRight, bool closed)
+    {
+        juce::Path p;
+        p.startNewSubPath (bottomLeft, bottom + 2.0f * unit);
+        p.lineTo (topLeft, top);
+        p.lineTo (topRight, top);
+        p.lineTo (bottomRight, bottom + 2.0f * unit);
+        if (closed)
+            p.closeSubPath();
+        return p.createPathWithRoundedCorners (2.0f * unit);
+    };
+
+    const auto bar = trapezoid (inset, inset + slant, w - inset - slant, w - inset, true);
+    // The same surface as the band panel, with its line of light along the top.
+    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (31, 31, 30).withAlpha (0.92f), top, juce::Colour (22, 22, 21).withAlpha (0.92f), bottom));
+    g.fillPath (bar);
+    g.setColour (textColour.withAlpha (0.12f));
+    g.strokePath (trapezoid (inset, inset + slant, w - inset - slant, w - inset, false), juce::PathStrokeType (1.0f * unit));
+
+    // The track: its name, centred, after a dot in its colour. Long names are
+    // cut short before they reach the output gain.
+    if (trackName.isNotEmpty())
+    {
+        const auto font = uiFont (11.0f * unit);
+        const bool dot = trackColour.has_value() && trackColour->getAlpha() > 0;
+        const float dotSpace = dot ? 13.0f * unit : 0.0f;
+        const float room = 2.0f * (outputFieldArea (w, bottom, unit).getX() - w / 2.0f - 12.0f * unit) - dotSpace;
+        const float textWidth = std::min (juce::GlyphArrangement::getStringWidth (font, trackName), room);
+
+        if (textWidth > 20.0f * unit)
+        {
+            const float left = w / 2.0f - (dotSpace + textWidth) / 2.0f;
+            const float tabTop = top + 3.0f * unit;
+            const float centreY = (tabTop + bottom) / 2.0f;
+
+            // The tab it sits in, pressed into the bar: a little lower than the
+            // bar's top, its sides rounding out as they go down, darker inside
+            // with a shadow under its top edge, and a faint lit rim outside it.
+            {
+                const float flare = 8.0f * unit, pad = 20.0f * unit;
+                const float tabLeft = left - pad, tabRight = left + dotSpace + textWidth + pad;
+                const auto outline = [&] (bool closed)
+                {
+                    juce::Path p;
+                    p.startNewSubPath (tabLeft - flare, bottom + 2.0f * unit);
+                    p.lineTo (tabLeft, tabTop);
+                    p.lineTo (tabRight, tabTop);
+                    p.lineTo (tabRight + flare, bottom + 2.0f * unit);
+                    if (closed)
+                        p.closeSubPath();
+                    return p.createPathWithRoundedCorners (7.0f * unit);
+                };
+
+                const auto well = outline (true);
+                g.setColour (textColour.withAlpha (0.1f));
+                g.strokePath (outline (false), juce::PathStrokeType (1.0f * unit),
+                              juce::AffineTransform::translation (0.0f, -0.8f * unit)); // the rim, catching the light
+                g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (12, 12, 12), tabTop, juce::Colour (17, 17, 16), bottom));
+                g.fillPath (well);
+
+                const juce::Graphics::ScopedSaveState clipped (g);
+                g.reduceClipRegion (well);
+                g.setGradientFill (juce::ColourGradient::vertical (juce::Colours::black.withAlpha (0.55f), tabTop, juce::Colours::black.withAlpha (0.0f), tabTop + 5.0f * unit));
+                g.strokePath (outline (false), juce::PathStrokeType (3.0f * unit)); // the shadow just inside its edge
+            }
+
+            if (dot)
+            {
+                g.setColour (trackColour->withAlpha (1.0f));
+                g.fillEllipse (left + 1.0f * unit, centreY - 3.5f * unit, 7.0f * unit, 7.0f * unit);
+            }
+
+            g.setFont (font);
+            g.setColour (textColour.withAlpha (0.88f));
+            g.drawText (trackName, juce::Rectangle<float> (left + dotSpace, tabTop, textWidth + 2.0f * unit, bottom - tabTop),
+                        juce::Justification::centredLeft, true);
+        }
+    }
+
+    // The output gain: a caption and its value, as plain text; hovering lights
+    // a soft field behind them.
+    const auto field = outputFieldArea (w, bottom, unit);
+    if (outputHot)
+    {
+        g.setColour (textColour.withAlpha (0.06f));
+        g.fillRoundedRectangle (field, 4.0f * unit);
+    }
+
+    const auto inner = field.reduced (8.0f * unit, 0.0f);
+    g.setFont (uiFont (11.0f * unit));
+    g.setColour (warmGrey.withAlpha (outputHot ? 0.9f : 0.62f));
+    g.drawText ("Output", inner, juce::Justification::centredLeft, false);
+
+    const float db = std::round (live.outputGainDb * 10.0f) / 10.0f;
+    const auto value = (db > 0.0f ? "+" : "") + juce::String (db == 0.0f ? 0.0f : db, 1) + " dB";
+    g.setColour (textColour.withAlpha (outputHot ? 1.0f : 0.88f));
+    g.drawText (value, inner, juce::Justification::centredRight, false);
+}
+
+// The output level meter, up the right-hand edge above the ? button: one slim
+// bar per channel, a held peak line on each, and a light at the top that
+// stays on for a while after the output goes over 0 dB.
+void SphereView::drawOutputMeter (juce::Graphics& g, const Camera& camera, float dt)
+{
+    constexpr float floorDb = -60.0f, fallDbPerSecond = 24.0f, peakHoldSeconds = 1.5f, peakFallDbPerSecond = 18.0f, clipHoldSeconds = 2.0f;
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+
+    for (size_t ch = 0; ch < 2; ++ch)
+    {
+        const float in = live.outputPeakDb[ch];
+        meterLevel[ch] = std::max (in, meterLevel[ch] - fallDbPerSecond * dt);
+
+        if (in >= meterPeak[ch])
+        {
+            meterPeak[ch] = in;
+            meterPeakTime[ch] = now;
+        }
+        else if (now - meterPeakTime[ch] > peakHoldSeconds)
+        {
+            meterPeak[ch] = std::max (in, meterPeak[ch] - peakFallDbPerSecond * dt);
+        }
+
+        if (in > 0.0f)
+            meterClipTime[ch] = now;
+    }
 
     const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
-    auto font = uiFont (9.0f * unit, true);
-    font.setExtraKerningFactor (0.22f);
-    g.setFont (font);
-    g.setColour (warmGrey.withAlpha (alpha));
+    const float centreX = camera.width - helpButtonInset * unit;
+    const float top = (presetBarBottom + 22.0f) * unit;
+    const float bottom = camera.height - (bottomBarHeight + 14.0f) * unit;
+    if (bottom - top < 40.0f * unit)
+        return;
 
-    const float centreY = camera.height - helpButtonInset * unit;
-    g.drawSingleLineText ("4KDSP", juce::roundToInt (21.0f * unit), juce::roundToInt (centreY + font.getAscent() * 0.38f));
+    const float barWidth = 3.0f * unit, gap = 2.0f * unit;
+    const auto yFor = [=] (float db) { return bottom - (bottom - top) * std::clamp ((db - floorDb) / -floorDb, 0.0f, 1.0f); };
+
+    // The scale: a few levels, faint, to the bars' left.
+    g.setFont (uiFont (8.0f * unit));
+    for (float db : { 0.0f, -12.0f, -24.0f, -36.0f, -48.0f })
+    {
+        const float y = yFor (db);
+        g.setColour (warmGrey.withAlpha (0.35f));
+        g.drawText (juce::String ((int) db), juce::Rectangle<float> (centreX - barWidth - gap - 26.0f * unit, y - 5.0f * unit, 20.0f * unit, 10.0f * unit),
+                    juce::Justification::centredRight, false);
+        g.setColour (warmGrey.withAlpha (0.18f));
+        g.fillRect (centreX - barWidth - gap - 4.0f * unit, y - 0.5f * unit, 2.5f * unit, 1.0f * unit);
+    }
+
+    for (size_t ch = 0; ch < 2; ++ch)
+    {
+        const float x = ch == 0 ? centreX - gap / 2.0f - barWidth : centreX + gap / 2.0f;
+        const juce::Rectangle<float> track (x, top, barWidth, bottom - top);
+
+        g.setColour (textColour.withAlpha (0.06f));
+        g.fillRoundedRectangle (track, barWidth / 2.0f);
+
+        // The level: pale, brighter as it nears the top.
+        const float levelY = yFor (meterLevel[ch]);
+        if (bottom - levelY > 0.5f)
+        {
+            g.setGradientFill (juce::ColourGradient::vertical (pale.withAlpha (0.95f), top, warmGrey.withAlpha (0.55f), bottom));
+            g.fillRoundedRectangle (track.withTop (levelY), barWidth / 2.0f);
+        }
+
+        // The held peak.
+        if (meterPeak[ch] > floorDb)
+        {
+            g.setColour (pale.withAlpha (0.9f));
+            g.fillRect (x, yFor (meterPeak[ch]) - 0.5f * unit, barWidth, 1.2f * unit);
+        }
+
+        // Over 0 dB: a red light above the bar.
+        const bool clipped = now - meterClipTime[ch] < clipHoldSeconds;
+        g.setColour (clipped ? cutColour : textColour.withAlpha (0.08f));
+        g.fillRoundedRectangle (juce::Rectangle<float> (x, top - 6.0f * unit, barWidth, 3.0f * unit), 1.0f * unit);
+    }
 }
 
 // The ? button, and the list of controls that appears while hovering over it.
@@ -362,8 +547,7 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
     helpAmount += ((hovered ? 1.0f : 0.0f) - helpAmount) * (1.0f - std::exp (-dt / 0.08f));
 
     const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr); // one scaled point, in device pixels
-    const float cx = camera.width - helpButtonInset * unit;
-    const float cy = camera.height - helpButtonInset * unit;
+    const auto [cx, cy] = helpButtonCentre (camera.width, camera.height, unit);
     const float radius = helpButtonRadius * unit;
     const juce::Rectangle<float> button (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
@@ -371,14 +555,14 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
     g.fillEllipse (button);
     g.setColour (warmGrey.withAlpha (0.45f + 0.4f * helpAmount));
     g.drawEllipse (button, 1.0f * unit);
-    g.setFont (uiFont (12.0f * unit, true));
+    g.setFont (uiFont (11.0f * unit, true));
     g.setColour (textColour.withAlpha (0.55f + 0.45f * helpAmount));
     g.drawText ("?", button, juce::Justification::centred, false);
 
     if (helpAmount < 0.01f)
         return;
 
-    static constexpr std::array<std::pair<const char*, const char*>, 15> rows {{
+    static constexpr std::array<std::pair<const char*, const char*>, 17> rows {{
         { "Double-click sphere",        "Add band" },
         { "Double-click band",          "Remove band" },
         { "Drag band",                  "Move band" },
@@ -394,6 +578,8 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
         { "Right-click band",           "Mute" },
         { "Shift+right-click band",     "Stereo / mono" },
         { "Shift+double-click band",    "Peak / cuts / shelves" },
+        { "Drag or scroll Output",      "Output gain" },
+        { "Click empty space",          "Hide panel (click a band: show)" },
     }};
 
     const auto font = uiFont (12.0f * unit);

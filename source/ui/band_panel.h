@@ -1,7 +1,7 @@
 /*
   ==============================================================================
 
-    The band control panel that slides up from the ^ button: filter type,
+    The band control panel, floating above the bottom bar whenever there is a band: filter type,
     stereo / mono and its position, solo, mute, remove, and the Freq, Gain and Q knobs.
     The ring round Gain holds the band's dynamics: drag it for the range, the
     inner ring for the threshold, and the gear opens ratio, attack,
@@ -36,7 +36,7 @@ enum class PanelPopup { none, types, dynamics };
 
 struct PanelTarget
 {
-    enum class Kind { none, toggle, background, previous, next, typeMenu, type, dynamicsMenu, sidechain, stereo, solo, mute, remove, knob };
+    enum class Kind { none, background, previous, next, typeMenu, type, dynamicsMenu, sidechain, stereo, solo, mute, remove, knob };
 
     Kind kind = Kind::none;
     int index = 0;        // which type or PanelKnob
@@ -56,10 +56,9 @@ struct BandPanelLayout
     std::array<juce::Rectangle<float>, numFilterTypes> typeItems;
     std::array<juce::Rectangle<float>, 3> dynamicsKnobs; // ratio, attack, release
 
-    juce::Point<float> toggleCentre;
     float scale = 1;
 
-    // Window size in component pixels. openAmount: 0 = closed (only the ^ button shows), 1 = fully up.
+    // Window size in component pixels. openAmount: 0 = away below the window, 1 = fully up.
     static BandPanelLayout make (float width, float height, float openAmount, PanelPopup popup);
 
     // position is in component pixels.

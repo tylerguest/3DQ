@@ -21,8 +21,9 @@
       right-click a node      mute
       Shift+right-click node  stereo / mono (both channels, or its one stereo position)
 
-    Hovering the ? button in the bottom-right corner lists these. The ^ button
-    at the bottom centre slides up a panel of controls for the selected band.
+    Hovering the ? button in the bottom-right corner lists these. While there
+    are bands, a panel of controls for the selected one floats above the bottom
+    bar; a click on empty space puts it away, and picking a band brings it back.
     Along the top are the preset menu, undo and A/B.
 
     Threads: mouse events arrive on the message thread and rendering runs on
@@ -59,6 +60,8 @@ public:
         StereoSpectrum::Result sidechain; // valid when hasSidechain
         bool hasSidechain = false;
         std::array<float, maxBands> gainDb {}, levelDb {};
+        std::array<float, 2> outputPeakDb { -120.0f, -120.0f }; // L, R
+        float outputGainDb = 0;
     };
 
     SphereView();
@@ -69,6 +72,11 @@ public:
     std::function<void (LiveAudio&)> readLiveAudio;             // render thread
     std::function<void (int band)> onSoloChanged;               // message thread; -1 = none
     std::function<void (PresetCommand, int preset)> onPresetCommand; // message thread
+    // The output gain (dB), all on the message thread. Edits come between a
+    // gesture's start (true) and end (false).
+    std::function<float()> getOutputGain;
+    std::function<void (float db)> onOutputGainEdited;
+    std::function<void (bool starting)> onOutputGainGesture;
 
     // Bands pushed from outside (host automation, preset load). Ignored during a drag.
     void setBands (const BandSet& bands);
@@ -78,6 +86,9 @@ public:
     void showNewBands (const BandSet& bands);
 
     void setPresetInfo (PresetInfo);
+
+    // The host's track, shown in the middle of the bottom bar. Message thread.
+    void setTrack (const juce::String& name, std::optional<juce::Colour> colour);
 
     void resized() override;
     void mouseEnter (const juce::MouseEvent&) override;
@@ -128,6 +139,11 @@ private:
         float restCentre = 0, recentreRest = 0;
         bool restCentrePlaced = false, easingRestCentre = false;
         bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
+        bool outputHovered = false, outputDragging = false;
+        bool panelPlaced = false; // the panel is shown or not from the first frame, without sliding
+        bool panelHidden = false; // clicked away; picking a band brings it back
+        juce::String trackName;
+        std::optional<juce::Colour> trackColour;
         PanelTarget panelHover;
         PresetTarget presetHover;
         std::shared_ptr<const PresetInfo> presetInfo = std::make_shared<PresetInfo>();
@@ -164,6 +180,8 @@ private:
     PanelTarget panelTargetLocked (juce::Point<float> position) const;
     PresetBarLayout presetLayoutLocked() const;
     bool overHelpButton (juce::Point<float> position) const;
+    bool overOutputField (juce::Point<float> position) const;
+    void editOutputGain (float db, bool wholeGesture);
 
     void pointerMoved (const juce::MouseEvent&);
 
@@ -187,8 +205,9 @@ private:
     void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected, float levelDb);
     void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
     void drawTitle (juce::Graphics&, const Camera&, int soloed);
-    void drawMakerMark (juce::Graphics&, const Camera&, float panelAmount);
+    void drawBottomBar (juce::Graphics&, const Camera&, bool outputHot, const juce::String& trackName, std::optional<juce::Colour> trackColour);
     void drawHelp (juce::Graphics&, const Camera&, bool hovered, float dt);
+    void drawOutputMeter (juce::Graphics&, const Camera&, float dt);
 
     juce::OpenGLContext context;
     SphereField field;
@@ -206,6 +225,10 @@ private:
     // it was caught, and what's shown (eased toward the peak).
     std::array<float, maxBands> peakMovement {}, shownMovement {};
     std::array<double, maxBands> peakTime {};
+    // The output meter, per channel: the level shown (it falls back slowly),
+    // the held peak and when it was caught, and when it last went over 0 dB.
+    std::array<float, 2> meterLevel { -120.0f, -120.0f }, meterPeak { -120.0f, -120.0f };
+    std::array<double, 2> meterPeakTime {}, meterClipTime { -10.0, -10.0 };
     float dpr = 1;
     double statsStart = 0, statsCpu = 0;
     int statsFrames = 0;
@@ -221,6 +244,8 @@ private:
     std::optional<GainDrag> gainDrag;
     std::optional<juce::Point<float>> panPosition; // last pointer position while panning
     std::optional<KnobDrag> knobDrag;
+    std::optional<float> outputDragY; // last pointer y while dragging the output gain
+    float outputDragDb = 0;
     juce::Point<float> lastPosition;
     std::vector<RotateSample> rotateSamples;
     int wheelBand = -1;

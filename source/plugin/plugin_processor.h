@@ -75,6 +75,10 @@ public:
 
     static BandParamIDs getBandParamIDs (int slot);
 
+    // The output gain, after the EQ (dB). Not part of a preset: it's how loud
+    // this instance plays, not the EQ's shape.
+    static inline const juce::String outputGainID { "out" };
+
     // enabled = the slot holds a band (it's on the sphere), regardless of mute.
     BandParams getBandParams (int slot) const;
     bool isBandMuted (int slot) const;
@@ -105,12 +109,22 @@ public:
     void copyRecentSidechain (float* left, float* right, int numSamples) const   { sidechainRing.copyRecent (left, right, numSamples); }
     double getAnalysisSampleRate() const { return analysisSampleRate.load(); }
 
+    // Whether the host has run processBlock in the last moment, so the GUI's
+    // meters fall back to silence instead of freezing when playback stops.
+    bool isProcessing() const;
+
     // Whether sound has reached the sidechain input in the last moment: false
     // with the bus off, with nothing routed to it, or once the host stops
     // processing (so the GUI never shows a frozen sidechain).
     bool hasSidechainInput() const;
 
+    // The host's track this instance sits on: its name and colour, where the
+    // host says. Message thread only.
+    void updateTrackProperties (const TrackProperties& properties) override    { trackProperties = properties; }
+    const TrackProperties& getTrackProperties() const                         { return trackProperties; }
+
 private:
+    TrackProperties trackProperties;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     struct BandParamPointers
@@ -146,6 +160,10 @@ private:
     AnalysisRing outputRing, sidechainRing;
     std::atomic<juce::uint32> lastSidechainSoundMs { 0 }; // Time::getMillisecondCounter() when it was last heard
     std::atomic<bool> sidechainHeard { false };
+    std::atomic<juce::uint32> lastBlockMs { 0 };           // the same, for the last processBlock
+    std::atomic<bool> processedAny { false };
+    std::atomic<float>* outputGain = nullptr;                // dB
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputLevel { 1.0f }; // its linear gain, gliding
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     dsp::SphereEq eq;

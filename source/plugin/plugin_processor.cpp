@@ -20,6 +20,8 @@ ThreeDQProcessor::ThreeDQProcessor()
                         .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       state (*this, nullptr, "ThreeDQ", createParameterLayout()) // XML tag names can't start with a digit
 {
+    outputGain = state.getRawParameterValue (outputGainID);
+
     for (int i = 0; i < maxBands; ++i)
     {
         const auto ids = getBandParamIDs (i);
@@ -109,6 +111,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
         layout.add (std::move (group));
     }
 
+    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { outputGainID, 1 }, "Output",
+                                                             juce::NormalisableRange<float> (-maxOutputGainDb, maxOutputGainDb), 0.0f,
+                                                             juce::AudioParameterFloatAttributes().withLabel ("dB")));
     return layout;
 }
 
@@ -132,6 +137,8 @@ void ThreeDQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     eq.prepare (sampleRate);
+    outputLevel.reset (sampleRate, 0.03);
+    outputLevel.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
     analysisSampleRate = sampleRate;
 }
 
@@ -204,8 +211,31 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
 
+    // The output gain, gliding so a change never clicks.
+    outputLevel.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load (std::memory_order_relaxed)));
+    if (outputLevel.isSmoothing() || outputLevel.getTargetValue() != 1.0f)
+    {
+        auto* left = buffer.getWritePointer (0);
+        auto* right = buffer.getWritePointer (1);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const float gain = outputLevel.getNextValue();
+            left[i] *= gain;
+            right[i] *= gain;
+        }
+    }
+
     // Feed the GUI's analyser with the processed output.
     outputRing.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    lastBlockMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
+    processedAny.store (true, std::memory_order_relaxed);
+}
+
+bool ThreeDQProcessor::isProcessing() const
+{
+    constexpr juce::uint32 holdMs = 250;
+    return processedAny.load (std::memory_order_relaxed)
+        && juce::Time::getMillisecondCounter() - lastBlockMs.load (std::memory_order_relaxed) < holdMs;
 }
 
 bool ThreeDQProcessor::hasSidechainInput() const

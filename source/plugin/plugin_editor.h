@@ -63,6 +63,7 @@ private:
     std::atomic<bool> hostChangedBands { false };
 
     StereoSpectrum spectrum, sidechainSpectrum;
+    static constexpr size_t meterWindow = 2048; // samples the output meter reads each frame: over 40 ms, longer than a frame
     std::vector<float> recentLeft  = std::vector<float> ((size_t) StereoSpectrum::fftSize);
     std::vector<float> recentRight = std::vector<float> ((size_t) StereoSpectrum::fftSize);
 

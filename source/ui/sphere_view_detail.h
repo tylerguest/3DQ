@@ -25,13 +25,31 @@ constexpr float gainDbPerPixel = 0.1f;
 constexpr float autoRotate = 0.0035f;     // radians per 1/60 s
 constexpr double autoResumeDelay = 1.5;   // seconds
 constexpr float minZoom = 0.25f, maxZoom = 2.5f;
-constexpr float helpButtonRadius = 10.0f;
-constexpr float helpButtonInset = 24.0f;  // from the window's right and bottom edges, to the button's centre
+constexpr float helpButtonRadius = 9.0f;
+constexpr float helpButtonInset = 24.0f;  // from the window's right edge to the button's centre; it sits mid-bar
+constexpr float bottomBarSideInset = 44.0f; // the bar's lower corners, in from the window's sides, leaving the ? its corner
+constexpr float bottomBarSlant = 13.0f;     // how far its ends lean in towards the top
+constexpr float outputFieldWidth = 96.0f, outputFieldHeight = 18.0f;
+constexpr float outputDbPerPixel = 0.1f;
 constexpr float knobPixelsFullRange = 200.0f;
 constexpr double peakHoldSeconds = 1.0;  // the GR meter holds a peak this long,
 constexpr float peakFallSeconds = 0.6f;  // then eases back over about this long;
 constexpr float meterGlideSeconds = 0.04f; // it glides to each new value rather than jumping
 constexpr float knobFineFactor = 0.2f; // while Shift is held
+
+// The bottom bar's buttons, in the same pixels as width and height; unit is one
+// scaled UI point in them.
+inline juce::Point<float> helpButtonCentre (float width, float height, float unit)
+{
+    return { width - helpButtonInset * unit, height - bottomBarHeight / 2.0f * unit };
+}
+
+inline juce::Rectangle<float> outputFieldArea (float width, float height, float unit)
+{
+    const float right = width - (bottomBarSideInset + bottomBarSlant + 6.0f) * unit;
+    return { right - outputFieldWidth * unit, height - (bottomBarHeight + outputFieldHeight) / 2.0f * unit,
+             outputFieldWidth * unit, outputFieldHeight * unit };
+}
 
 inline double nowSeconds()    { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }
 

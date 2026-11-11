@@ -93,6 +93,13 @@ void SphereView::setPresetInfo (PresetInfo info)
     state.presetInfo = std::move (shared);
 }
 
+void SphereView::setTrack (const juce::String& name, std::optional<juce::Colour> colour)
+{
+    const std::lock_guard lock (stateLock);
+    state.trackName = name;
+    state.trackColour = colour;
+}
+
 void SphereView::notifyBandsEdited (const BandSet& bands)
 {
     if (onBandsEdited != nullptr)
@@ -202,8 +209,27 @@ int SphereView::hitBand (juce::Point<float> p, const Camera& camera) const
 bool SphereView::overHelpButton (juce::Point<float> position) const
 {
     const float scale = uiScale ((float) getWidth(), (float) getHeight());
-    const juce::Point<float> centre ((float) getWidth() - helpButtonInset * scale, (float) getHeight() - helpButtonInset * scale);
+    const auto centre = helpButtonCentre ((float) getWidth(), (float) getHeight(), scale);
     return position.getDistanceFrom (centre) <= (helpButtonRadius + 3.0f) * scale;
+}
+
+bool SphereView::overOutputField (juce::Point<float> position) const
+{
+    const float scale = uiScale ((float) getWidth(), (float) getHeight());
+    return outputFieldArea ((float) getWidth(), (float) getHeight(), scale).expanded (2.0f * scale).contains (position);
+}
+
+// Sets the output gain, clamped; wholeGesture wraps it in a gesture of its own.
+void SphereView::editOutputGain (float db, bool wholeGesture)
+{
+    if (onOutputGainEdited == nullptr)
+        return;
+
+    if (wholeGesture && onOutputGainGesture != nullptr)
+        onOutputGainGesture (true);
+    onOutputGainEdited (std::clamp (db, -maxOutputGainDb, maxOutputGainDb));
+    if (wholeGesture && onOutputGainGesture != nullptr)
+        onOutputGainGesture (false);
 }
 
 // Keeps the sphere's centre inside the window, so it can never be lost off-screen.
@@ -269,7 +295,7 @@ void SphereView::updateCursorLocked()
 {
     using Kind = PanelTarget::Kind;
 
-    if (knobDrag.has_value())
+    if (knobDrag.has_value() || outputDragY.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
     else if (state.presetHover.kind == PresetTarget::Kind::menuBackground)
         setMouseCursor (juce::MouseCursor::NormalCursor);
@@ -281,6 +307,8 @@ void SphereView::updateCursorLocked()
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     else if (state.helpHovered)
         setMouseCursor (juce::MouseCursor::NormalCursor);
+    else if (state.outputHovered)
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
     else if (gainDrag.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
     else if (state.dragged < 0 && ! state.rotating && ! panPosition.has_value() && state.hovered >= 0)
@@ -323,13 +351,15 @@ void SphereView::renderOpenGL()
     BandSet bands;
     Camera camera;
     int hovered, dragged, selected, soloed, activeKnob;
-    bool helpHovered, panelOpen;
+    bool helpHovered, panelOpen, outputHot;
     float panelAmount;
     PanelTarget panelHover;
     float selectedLevelDb = -120.0f;
     PanelPopup panelPopup;
     PresetTarget presetHover;
     std::shared_ptr<const PresetInfo> presetInfo;
+    juce::String trackName;
+    std::optional<juce::Colour> trackColour;
     bool presetMenuOpen;
     PresetBarLayout presetLayout;
 
@@ -433,7 +463,24 @@ void SphereView::renderOpenGL()
         hovered = state.hovered;
         dragged = state.dragged;
         helpHovered = state.helpHovered;
-        // A closed panel leaves this alone, so only a clicked band gets highlighted.
+        outputHot = state.outputHovered || state.outputDragging;
+        // The panel floats over the view whenever there's a band for it to show,
+        // unless it's been clicked away.
+        const bool wantPanel = state.bands.begin() != state.bands.end() && ! state.panelHidden;
+        if (wantPanel != state.panelOpen)
+        {
+            state.panelOpen = wantPanel;
+            if (wantPanel)
+                updatePanelFitLocked();
+            else
+                state.restCentre = restCentreLocked(); // the panel's fit hides this until it slides away
+        }
+        if (! state.panelPlaced)
+        {
+            state.panelAmount = wantPanel ? 1.0f : 0.0f; // already there when the window opens
+            state.panelPlaced = true;
+        }
+
         if (state.panelOpen)
             validateSelectionLocked();
 
@@ -453,6 +500,8 @@ void SphereView::renderOpenGL()
         panelAmount = state.panelAmount;
         presetHover = state.presetHover;
         presetInfo = state.presetInfo;
+        trackName = state.trackName;
+        trackColour = state.trackColour;
         presetMenuOpen = state.presetMenuOpen;
         presetLayout = PresetBarLayout::make (componentWidth.load(), componentHeight.load(), presetInfo->presets.size(), state.presetMenuScroll);
         camera = makeCameraLocked ((float) width, (float) height, dpr);
@@ -491,9 +540,10 @@ void SphereView::renderOpenGL()
         juce::Graphics g (*overlay);
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
-        drawMakerMark (g, camera, panelAmount);
+        drawBottomBar (g, camera, outputHot, trackName, trackColour);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup), dpr, panelAmount,
                        bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb);
+        drawOutputMeter (g, camera, dt);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));
         drawPresetBar (g, presetLayout, dpr, *presetInfo, presetHover, presetMenuAmount);

@@ -27,6 +27,7 @@ void SphereView::mouseExit (const juce::MouseEvent&)
     const std::lock_guard lock (stateLock);
     state.pointerInside = false;
     state.helpHovered = false;
+    state.outputHovered = false;
     state.panelHover = {};
     state.presetHover = {};
     state.lastInteraction = nowSeconds();
@@ -172,13 +173,6 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
 
         switch (target.kind)
         {
-            case Kind::toggle:
-                state.panelOpen = ! state.panelOpen;
-                if (state.panelOpen)
-                    updatePanelFitLocked();
-                else
-                    state.restCentre = restCentreLocked(); // the panel's fit hides this until it slides away
-                break;
             case Kind::previous:  selectNeighbourLocked (-1); break;
             case Kind::next:      selectNeighbourLocked (1); break;
             case Kind::typeMenu:
@@ -357,7 +351,25 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
 
     presetTookPress = presetMouseDown (e);
 
-    if (presetTookPress || overHelpButton (e.position) || panelMouseDown (e))
+    if (presetTookPress || overHelpButton (e.position))
+        return;
+
+    // The output gain: drag it up or down.
+    if (overOutputField (e.position) && e.mods.isLeftButtonDown() && onOutputGainEdited != nullptr)
+    {
+        outputDragY = e.position.y;
+        outputDragDb = getOutputGain != nullptr ? getOutputGain() : 0.0f;
+        if (onOutputGainGesture != nullptr)
+            onOutputGainGesture (true);
+
+        const std::lock_guard lock (stateLock);
+        state.outputDragging = true;
+        state.lastInteraction = nowSeconds();
+        updateCursorLocked();
+        return;
+    }
+
+    if (panelMouseDown (e))
         return;
 
     BandSet edited;
@@ -381,7 +393,10 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
         const int hit = hitBand (toDevice (e.position), camera);
 
         if (hit >= 0)
+        {
             state.selected = hit;
+            state.panelHidden = false;
+        }
 
         // Right-click a band to mute / unmute it. macOS reports Ctrl+click as a
         // right-click; that's the gain drag, so it's ignored here.
@@ -450,6 +465,32 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
 
 void SphereView::pointerMoved (const juce::MouseEvent& e)
 {
+    if (outputDragY.has_value())
+    {
+        const float scale = uiScale ((float) getWidth(), (float) getHeight());
+        const float fine = e.mods.isShiftDown() ? knobFineFactor : 1.0f;
+        outputDragDb = std::clamp (outputDragDb + (*outputDragY - e.position.y) / scale * outputDbPerPixel * fine, -maxOutputGainDb, maxOutputGainDb);
+        outputDragY = e.position.y;
+        onOutputGainEdited (outputDragDb);
+        return;
+    }
+
+    {
+        const std::lock_guard lock (stateLock);
+        state.outputHovered = ! pressed.has_value() && ! gainDrag.has_value() && ! panPosition.has_value() && ! knobDrag.has_value()
+                              && ! state.presetMenuOpen && overOutputField (e.position);
+        if (state.outputHovered)
+        {
+            state.hovered = -1;
+            state.helpHovered = false;
+            state.panelHover = {};
+            state.presetHover = {};
+            state.pointerInside = true;
+            updateCursorLocked();
+            return;
+        }
+    }
+
     if (presetPointerMoved (e) || panelPointerMoved (e))
         return;
 
@@ -543,8 +584,17 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
 
     publishSolo();
 
+    if (outputDragY.has_value())
+    {
+        outputDragY.reset();
+        if (onOutputGainGesture != nullptr)
+            onOutputGainGesture (false);
+    }
+
     const std::lock_guard lock (stateLock);
     const auto now = nowSeconds();
+    state.outputDragging = false;
+    state.outputHovered = overOutputField (e.position);
 
     const bool clickedEmpty = pressed.has_value() && pressed->band < 0
                               && (! state.rotating || (now - pressed->time < clickMaxSeconds
@@ -576,10 +626,14 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
         }
     }
 
-    // A plain click on empty space clears the highlight. An open panel always
-    // shows a band, so it keeps its selection.
-    if (clickedEmpty && ! state.panelOpen)
+    // A plain click on empty space clears the highlight and puts the panel
+    // away, until a band is picked again.
+    if (clickedEmpty)
+    {
         state.selected = -1;
+        state.panelHidden = true;
+        state.panelPopup = PanelPopup::none;
+    }
 
     state.rotating = false;
     state.dragged = -1;
@@ -591,14 +645,23 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
     state.helpHovered = overHelpButton (e.position);
     state.panelHover = panelTargetLocked (e.position);
     state.presetHover = presetLayoutLocked().hit (e.position, state.presetMenuOpen);
-    state.hovered = state.helpHovered || state.panelHover.kind != PanelTarget::Kind::none || state.presetHover.kind != PresetTarget::Kind::none
+    state.hovered = state.helpHovered || state.outputHovered || state.panelHover.kind != PanelTarget::Kind::none || state.presetHover.kind != PresetTarget::Kind::none
                         ? -1 : hitBand (toDevice (e.position), cameraLocked());
     updateCursorLocked();
 }
 
 void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    if (presetTookPress || e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown() || overHelpButton (e.position) || panelDoubleClick (e))
+    if (presetTookPress || e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown() || overHelpButton (e.position))
+        return;
+
+    if (overOutputField (e.position))
+    {
+        editOutputGain (0.0f, true);
+        return;
+    }
+
+    if (panelDoubleClick (e))
         return;
 
     BandSet edited;
@@ -665,6 +728,7 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
 
             state.hovered = slot;
             state.selected = slot;
+            state.panelHidden = false;
 
             // Open the panel on the new band, fitting the view (new band included) above it.
             if (! state.panelOpen)
@@ -691,6 +755,13 @@ void SphereView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
         return;
 
     const float delta = wheel.isSmooth ? -raw * 512.0f : (raw > 0.0f ? -100.0f : 100.0f);
+
+    // The output gain: half a dB a notch, a tenth with Shift.
+    if (overOutputField (e.position) && getOutputGain != nullptr)
+    {
+        editOutputGain (getOutputGain() - delta / 100.0f * (e.mods.isShiftDown() ? 0.1f : 0.5f), true);
+        return;
+    }
 
     if (presetWheel (e, delta) || panelWheel (e, delta))
         return;

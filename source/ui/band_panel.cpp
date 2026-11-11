@@ -16,14 +16,12 @@ namespace
 {
 constexpr float panelHeight = 118.0f;
 // The panel's outline follows its controls: lower along the sides, rising in
-// a rounded crown over the Gain ring, where the ^ button sits.
+// a rounded crown over the Gain ring.
 constexpr float sideTopInset = 12.0f, crownTopInset = 2.0f;
 constexpr float sideColumnWidth = 72.0f;   // the band and type on the left; stereo and solo / mute / remove on the right
 constexpr float sideKnobSpacing = 76.0f;   // from Gain's centre to Freq's and Q's
-constexpr float panelBottomInset = 10.0f;
-constexpr float toggleRadius = 10.0f;
-constexpr float toggleClosedInset = 24.0f; // from the window's bottom edge to the button's centre
-constexpr float panelViewGap = 6.0f;       // between the sphere's room and the ^ button on the panel's edge
+constexpr float panelBottomInset = bottomBarHeight + 14.0f; // floating clear of the bar
+constexpr float panelViewGap = 10.0f;      // between the sphere's room and the panel's crown
 constexpr float panelFitMargin = 10.0f;    // kept clear above and below the sphere when it is fitted
 constexpr float gainKnobRadius = 22.0f;
 constexpr float ringRadius = 36.0f, ringWidth = 5.0f;           // the range ring round Gain
@@ -157,47 +155,38 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
     g.strokePath (p, juce::PathStrokeType (thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
-// The panel's outline, contoured to its controls (see sideTopInset).
+// The panel's outline, contoured to its controls (see sideTopInset): a box
+// with a flat-topped crown over the Gain ring, its sides long, shallow slopes.
 juce::Path panelOutline (juce::Rectangle<float> panel)
 {
-    constexpr float corner = 12.0f;
     const float l = panel.getX(), r = panel.getRight(), cx = panel.getCentreX();
     const float top = panel.getY() + sideTopInset, crown = panel.getY() + crownTopInset;
     const float bottom = panel.getBottom();
 
     juce::Path p;
-    p.startNewSubPath (l + corner, top);
-    // Up over the Gain ring and down again: wide, easy curves, so it reads as
-    // one shape rather than a box with a bump.
-    p.lineTo (cx - 84.0f, top);
-    p.cubicTo (cx - 52.0f, top, cx - 42.0f, crown, cx, crown);
-    p.cubicTo (cx + 42.0f, crown, cx + 52.0f, top, cx + 84.0f, top);
-    p.lineTo (r - corner, top);
-    p.quadraticTo (r, top, r, top + corner);
-    p.lineTo (r, bottom - corner);
-    p.quadraticTo (r, bottom, r - corner, bottom);
-    p.lineTo (l + corner, bottom);
-    p.quadraticTo (l, bottom, l, bottom - corner);
-    p.lineTo (l, top + corner);
-    p.quadraticTo (l, top, l + corner, top);
+    p.startNewSubPath (l, bottom);
+    p.lineTo (l, top);
+    p.lineTo (cx - 100.0f, top);
+    p.lineTo (cx - 60.0f, crown);
+    p.lineTo (cx + 60.0f, crown);
+    p.lineTo (cx + 100.0f, top);
+    p.lineTo (r, top);
+    p.lineTo (r, bottom);
     p.closeSubPath();
-    return p;
+    return p.createPathWithRoundedCorners (12.0f);
 }
 
-// Smoked glass, matte: a see-through graphite body, a touch lighter at the
-// top, and a hairline rim that catches a little more light along the top.
-// Pressed, it's filled in a little warmer and its rim brightens.
-void glass (juce::Graphics& g, const juce::Path& shape, juce::Rectangle<float> area, float alpha,
-            float bodyAlpha, bool pressed = false, bool hovered = false)
+// A surface: a dark graphite body, a shade lighter at the top, and an edge
+// that's just there: a faint line of light along the top, fading away down
+// the sides.
+void glass (juce::Graphics& g, const juce::Path& shape, juce::Rectangle<float> area, float alpha, float bodyAlpha)
 {
-    const float lift = pressed ? 0.12f : hovered ? 0.07f : 0.0f;
-    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (28, 28, 26).interpolatedWith (textColour, lift).withAlpha (bodyAlpha * alpha), area.getY(),
-                                                       juce::Colour (12, 12, 11).interpolatedWith (textColour, lift * 0.6f).withAlpha (bodyAlpha * alpha), area.getBottom()));
+    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (33, 33, 32).withAlpha (bodyAlpha * alpha), area.getY(),
+                                                       juce::Colour (21, 21, 20).withAlpha (bodyAlpha * alpha), area.getBottom()));
     g.fillPath (shape);
 
-    const float rim = pressed ? 0.4f : hovered ? 0.32f : 0.22f;
-    g.setGradientFill (juce::ColourGradient::vertical (warmGrey.withAlpha (rim * 1.4f * alpha), area.getY(),
-                                                       warmGrey.withAlpha (rim * 0.6f * alpha), area.getBottom()));
+    g.setGradientFill (juce::ColourGradient::vertical (textColour.withAlpha (0.13f * alpha), area.getY(),
+                                                       textColour.withAlpha (0.03f * alpha), area.getY() + 40.0f));
     g.strokePath (shape, juce::PathStrokeType (1.0f));
 }
 }
@@ -252,15 +241,13 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
     {
         constexpr float knobWidth = 54.0f, menuWidth = 4.0f * knobWidth + 56.0f, menuHeight = 72.0f;
         const float centreX = left + panelWidth / 2.0f; // centred over the panel
-        l.popupArea = { centreX - menuWidth / 2.0f, top - 14.0f - menuHeight, menuWidth, menuHeight }; // clear of the ^ button
+        l.popupArea = { centreX - menuWidth / 2.0f, top - 8.0f - menuHeight, menuWidth, menuHeight };
         for (int i = 0; i < 3; ++i)
             l.dynamicsKnobs[(size_t) i] = { l.popupArea.getX() + 6.0f + knobWidth * (float) i, l.popupArea.getY() + 6.0f, knobWidth, menuHeight - 12.0f };
         l.grMeter = { l.popupArea.getX() + 6.0f + knobWidth * 3.0f, l.popupArea.getY() + 6.0f, knobWidth, menuHeight - 12.0f };
         l.sidechain = { l.popupArea.getRight() - 46.0f, l.popupArea.getY() + 16.0f, 38.0f, 22.0f };
     }
 
-    const float toggleOpen = openTop + crownTopInset; // on the crown
-    l.toggleCentre = { width / 2.0f, (height - toggleClosedInset) + (toggleOpen - (height - toggleClosedInset)) * openAmount };
     return l;
 }
 
@@ -268,9 +255,6 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
 {
     using Kind = PanelTarget::Kind;
     const auto p = position / scale;
-
-    if (p.getDistanceFrom (toggleCentre) <= toggleRadius + 3.0f)
-        return { Kind::toggle };
 
     if (! open)
         return { Kind::none };
@@ -332,7 +316,7 @@ PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float pan
     // The space between the preset bar and the panel.
     const float scale = uiScale (width, height);
     const float roomTop = scale * presetBarBottom;
-    const float room = height - scale * (panelHeight + panelBottomInset + toggleRadius + panelViewGap);
+    const float room = height - scale * (panelHeight + panelBottomInset + panelViewGap);
     const float radius = std::min (width, height) * sphereRadiusFraction * zoom;
     const float fittedRadius = std::min (radius, (room - roomTop - 2.0f * panelFitMargin) / (extent.top - extent.bottom));
 
@@ -447,11 +431,11 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
         g.setColour (c);
         g.drawText (s, area, juce::Justification::centred, false);
     };
-    // A control's name: small capitals, spaced out a little, quieter than its value.
+    // A control's name, in plain capitals.
     const auto caption = [&] (const juce::String& s, juce::Rectangle<float> area, juce::Colour c)
     {
-        g.setFont (uiFont (8.5f).withExtraKerningFactor (0.12f));
-        g.setColour (c.withMultipliedAlpha (0.85f));
+        g.setFont (uiFont (9.5f).withExtraKerningFactor (0.05f));
+        g.setColour (c.withMultipliedAlpha (0.95f));
         g.drawText (s, area, juce::Justification::centred, false);
     };
     const auto buttonBack = [&] (juce::Rectangle<float> area, bool active, bool hovered)
@@ -461,24 +445,24 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
         g.setColour (faded (textColour.withAlpha (active ? 0.18f : 0.08f)));
         g.fillRoundedRectangle (area.reduced (1.0f), 4.0f);
     };
-    // A pill: a glass button to click or drag; switched on, it's pressed in.
+    // A pill: a flat, lighter patch to click or drag, no outline; lighter
+    // still when hovered or switched on.
     const auto pill = [&] (juce::Rectangle<float> area, bool active, bool hovered)
     {
-        juce::Path shape;
-        shape.addRoundedRectangle (area, 6.0f);
-        glass (g, shape, area, amount, 0.5f, active, hovered);
+        g.setColour (faded (textColour.withAlpha (active ? 0.13f : hovered ? 0.09f : 0.055f)));
+        g.fillRoundedRectangle (area, 6.0f);
     };
     const auto popupBack = [&] (juce::Rectangle<float> area)
     {
         juce::Path shape;
         shape.addRoundedRectangle (area, 10.0f);
-        glass (g, shape, area, amount, 0.78f);
+        glass (g, shape, area, amount, 0.94f);
     };
 
     if (amount > 0.01f)
     {
-        // The panel: a pane of smoked glass, the sphere faintly showing through.
-        glass (g, panelOutline (l.panel), l.panel, amount, 0.62f);
+        // The panel: nearly solid, the sphere only just showing through.
+        glass (g, panelOutline (l.panel), l.panel, amount, 0.84f);
 
         if (band == nullptr)
         {
@@ -494,54 +478,49 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 return activeKnob == knob || (hover.kind == Kind::knob && hover.index == knob && hover.inPopup == inPopup);
             };
 
-            // A knob: its track, the value's arc (orange up, red down for gains),
-            // and a pointer.
+            // A knob: a dark disc with a thin arc just inside its edge for the
+            // value (from the middle for gains), and a short tick where it ends.
+            // Gain has no arc: its rings are round it instead.
             const auto knob = [&] (juce::Point<float> c, float radius, int which, bool lit, bool enabled, float dim = 1.0f, bool track = true)
             {
                 dim *= enabled ? 1.0f : 0.32f;
                 const float position = std::clamp (knobPosition (*band, which), 0.0f, 1.0f);
                 const float angle = knobStartAngle + position * knobSweep;
                 const float anchor = knobIsBipolar (which) ? knobStartAngle + 0.5f * knobSweep : knobStartAngle;
-                const float stroke = radius > 12.0f ? 2.5f : 2.0f;
-                const float body = radius - (radius > 12.0f ? 4.5f : 3.0f);
+                const bool small = radius <= 12.0f;
+                const float body = radius - 0.5f;
+                const float arcRadius = body - (small ? 2.5f : 3.5f), stroke = small ? 1.5f : 2.0f;
                 const auto bodyArea = juce::Rectangle<float> (body * 2.0f, body * 2.0f).withCentre (c);
 
-                // The value track, cut into the panel round the knob. Gain has
-                // none: its rings are round it instead, and the range ring
-                // starts from its value.
+                juce::Path cap;
+                cap.addEllipse (bodyArea);
+                g.setGradientFill (juce::ColourGradient::vertical (faded (juce::Colour (40, 40, 39).brighter (lit ? 0.12f : 0.0f).withMultipliedAlpha (dim)), bodyArea.getY(),
+                                                                   faded (juce::Colour (22, 22, 21).withMultipliedAlpha (dim)), bodyArea.getBottom()));
+                g.fillPath (cap);
+                g.setColour (faded (juce::Colours::black.withAlpha (0.6f * dim)));
+                g.strokePath (cap, juce::PathStrokeType (1.2f));
+                g.setColour (faded (textColour.withAlpha ((lit ? 0.16f : 0.08f) * dim)));
+                strokeRounded (g, arc (c.x, c.y, body - 0.8f, -1.2f, 1.2f), 0.8f); // light catching the top edge
+
                 if (track)
                 {
-                    g.setColour (faded (juce::Colours::black.withAlpha (0.3f * dim)));
-                    strokeRounded (g, arc (c.x, c.y, radius, knobStartAngle, knobStartAngle + knobSweep), stroke + 0.5f);
-                    g.setColour (faded (textColour.withAlpha ((lit ? 0.2f : 0.1f) * dim)));
-                    strokeRounded (g, arc (c.x, c.y, radius, knobStartAngle, knobStartAngle + knobSweep), stroke * 0.6f);
+                    g.setColour (faded (juce::Colours::black.withAlpha (0.35f * dim)));
+                    strokeRounded (g, arc (c.x, c.y, arcRadius, knobStartAngle, knobStartAngle + knobSweep), stroke);
 
                     if (enabled && std::abs (angle - anchor) > 0.01f)
                     {
-                        const auto valueArc = arc (c.x, c.y, radius, std::min (anchor, angle), std::max (anchor, angle));
-                        g.setColour (faded (bright.withAlpha (0.12f * dim)));
-                        strokeRounded (g, valueArc, stroke + 4.0f); // a faint glow
-                        g.setColour (faded (bright.withMultipliedAlpha (dim)));
-                        strokeRounded (g, valueArc, stroke + 0.2f);
+                        g.setColour (faded (bright.withAlpha ((lit ? 1.0f : 0.85f) * dim)));
+                        strokeRounded (g, arc (c.x, c.y, arcRadius, std::min (anchor, angle), std::max (anchor, angle)), stroke);
                     }
                 }
 
-                // The knob itself: a matte cap, a shade lighter towards the top,
-                // with a hairline rim.
-                juce::Path cap;
-                cap.addEllipse (bodyArea);
-                g.setGradientFill (juce::ColourGradient::vertical (faded (juce::Colour (44, 44, 41).brighter (lit ? 0.15f : 0.0f).withMultipliedAlpha (dim)), bodyArea.getY(),
-                                                                   faded (juce::Colour (24, 24, 22).withMultipliedAlpha (dim)), bodyArea.getBottom()));
-                g.fillPath (cap);
-                g.setColour (faded (warmGrey.withAlpha ((lit ? 0.45f : 0.25f) * dim)));
-                g.strokePath (cap, juce::PathStrokeType (1.0f));
-
-                // The pointer, a line in from the cap's edge.
-                juce::Path pointer;
-                pointer.startNewSubPath (c.x + std::sin (angle) * body * 0.35f, c.y - std::cos (angle) * body * 0.35f);
-                pointer.lineTo (c.x + std::sin (angle) * (body - 2.5f), c.y - std::cos (angle) * (body - 2.5f));
+                juce::Path tick;
+                const float inner = track ? arcRadius - (small ? 4.0f : 6.0f) : body * 0.45f;
+                const float outer = track ? arcRadius - stroke : body - 4.0f;
+                tick.startNewSubPath (c.x + std::sin (angle) * inner, c.y - std::cos (angle) * inner);
+                tick.lineTo (c.x + std::sin (angle) * outer, c.y - std::cos (angle) * outer);
                 g.setColour (faded (bright.withMultipliedAlpha (dim)));
-                strokeRounded (g, pointer, radius > 12.0f ? 2.0f : 1.4f);
+                strokeRounded (g, tick, small ? 1.4f : 1.8f);
             };
 
             // Left column: the band picker and the filter type.
@@ -835,22 +814,6 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
             }
         }
     }
-
-    // The ^ button, riding on the panel's top edge once it's open.
-    const auto c = l.toggleCentre;
-    const bool hovered = hover.kind == Kind::toggle;
-    g.setColour (graphite.withAlpha (0.85f));
-    g.fillEllipse (c.x - toggleRadius, c.y - toggleRadius, toggleRadius * 2.0f, toggleRadius * 2.0f);
-    g.setColour (warmGrey.withAlpha (hovered ? 0.85f : 0.45f));
-    g.drawEllipse (c.x - toggleRadius, c.y - toggleRadius, toggleRadius * 2.0f, toggleRadius * 2.0f, 1.0f);
-
-    const float tip = 2.5f - 5.0f * amount; // flips from ^ to v as the panel rises
-    juce::Path chevron;
-    chevron.startNewSubPath (c.x - 4.0f, c.y + tip);
-    chevron.lineTo (c.x, c.y - tip);
-    chevron.lineTo (c.x + 4.0f, c.y + tip);
-    g.setColour (textColour.withAlpha (hovered ? 1.0f : 0.6f));
-    strokeRounded (g, chevron, 1.5f);
 }
 
 } // namespace threedq
