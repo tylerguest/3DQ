@@ -17,7 +17,7 @@ namespace
 constexpr float panelHeight = 118.0f;
 // The panel's outline follows its controls: lower along the sides, rising in
 // a rounded crown over the Gain ring.
-constexpr float sideTopInset = 12.0f, crownTopInset = 2.0f;
+constexpr float sideTopInset = 30.0f, crownTopInset = 2.0f;
 constexpr float sideColumnWidth = 72.0f;   // the band and type on the left; stereo and solo / mute / remove on the right
 constexpr float sideKnobSpacing = 76.0f;   // from Gain's centre to Freq's and Q's
 constexpr float panelBottomInset = bottomBarHeight + 14.0f; // floating clear of the bar
@@ -155,25 +155,32 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
     g.strokePath (p, juce::PathStrokeType (thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
-// The panel's outline, contoured to its controls (see sideTopInset): a box
-// with a flat-topped crown over the Gain ring, its sides long, shallow slopes.
+// The panel's outline, contoured to its controls (see sideTopInset): low
+// shoulders over the side columns, and over Gain one soft wave, each side a
+// single S-curve up to a short level top.
 juce::Path panelOutline (juce::Rectangle<float> panel)
 {
+    constexpr float corner = 12.0f;
     const float l = panel.getX(), r = panel.getRight(), cx = panel.getCentreX();
     const float top = panel.getY() + sideTopInset, crown = panel.getY() + crownTopInset;
     const float bottom = panel.getBottom();
 
     juce::Path p;
-    p.startNewSubPath (l, bottom);
-    p.lineTo (l, top);
-    p.lineTo (cx - 100.0f, top);
-    p.lineTo (cx - 60.0f, crown);
-    p.lineTo (cx + 60.0f, crown);
-    p.lineTo (cx + 100.0f, top);
-    p.lineTo (r, top);
-    p.lineTo (r, bottom);
+    p.startNewSubPath (l + corner, top);
+    p.lineTo (cx - 140.0f, top);
+    p.cubicTo (cx - 96.0f, top, cx - 84.0f, crown, cx - 40.0f, crown);
+    p.lineTo (cx + 40.0f, crown);
+    p.cubicTo (cx + 84.0f, crown, cx + 96.0f, top, cx + 140.0f, top);
+    p.lineTo (r - corner, top);
+    p.quadraticTo (r, top, r, top + corner);
+    p.lineTo (r, bottom - corner);
+    p.quadraticTo (r, bottom, r - corner, bottom);
+    p.lineTo (l + corner, bottom);
+    p.quadraticTo (l, bottom, l, bottom - corner);
+    p.lineTo (l, top + corner);
+    p.quadraticTo (l, top, l + corner, top);
     p.closeSubPath();
-    return p.createPathWithRoundedCorners (12.0f);
+    return p;
 }
 
 // A surface: a dark graphite body, a shade lighter at the top, and an edge
@@ -207,18 +214,21 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
     l.panel = { left, top, panelWidth, panelHeight };
 
     // Left column: the band picker, then the filter type.
-    l.previous = { x, top + 20.0f, 16.0f, 22.0f };
-    l.title = { x + 16.0f, top + 20.0f, sideColumnWidth - 32.0f, 22.0f };
-    l.next = { x + sideColumnWidth - 16.0f, top + 20.0f, 16.0f, 22.0f };
-    l.typePill = { x, top + 48.0f, sideColumnWidth, 24.0f };
+    // The side columns sit low, level with the knobs, under the panel's
+    // shoulders; the crown rises over Gain between them.
+    constexpr float row1 = 40.0f, row2 = 66.0f, row3 = 93.0f;
+    l.previous = { x, top + row1, 16.0f, 22.0f };
+    l.title = { x + 16.0f, top + row1, sideColumnWidth - 32.0f, 22.0f };
+    l.next = { x + sideColumnWidth - 16.0f, top + row1, 16.0f, 22.0f };
+    l.typePill = { x, top + row2, sideColumnWidth, 24.0f };
 
     // Right column: solo, mute and remove, then stereo / mono and the position.
     const float rx = right - sideColumnWidth;
-    l.solo = { rx + 6.0f, top + 20.0f, 22.0f, 22.0f };
-    l.mute = { rx + 28.0f, top + 20.0f, 22.0f, 22.0f };
-    l.remove = { rx + 50.0f, top + 20.0f, 22.0f, 22.0f };
-    l.stereo = { rx, top + 48.0f, sideColumnWidth, 24.0f };
-    l.positionPill = { rx, top + 76.0f, sideColumnWidth, 24.0f };
+    l.solo = { rx + 6.0f, top + row1, 22.0f, 22.0f };
+    l.mute = { rx + 28.0f, top + row1, 22.0f, 22.0f };
+    l.remove = { rx + 50.0f, top + row1, 22.0f, 22.0f };
+    l.stereo = { rx, top + row2, sideColumnWidth, 24.0f };
+    l.positionPill = { rx, top + row3, sideColumnWidth, 20.0f };
 
     // Centre: Freq, Gain inside its two dynamics rings, and Q. The gear sits
     // off the rings' upper right.
@@ -415,6 +425,54 @@ bool knobEnabled (const Band& b, int knob)
 
 bool knobIsStepped (const Band& b, int knob)    { return knob == qKnob && b.isCut(); }
 
+namespace
+{
+// A knob: a dark disc with a thin arc just inside its edge for the value (from
+// the middle when bipolar) and a short tick where it ends. Without track
+// there's no arc: Gain's rings stand in for it. position runs 0..1.
+void drawKnob (juce::Graphics& g, juce::Point<float> c, float radius, float position, bool bipolar, bool lit, bool showValue,
+               float alpha, bool track)
+{
+    const auto bright = textColour;
+    const float angle = knobStartAngle + std::clamp (position, 0.0f, 1.0f) * knobSweep;
+    const float anchor = bipolar ? knobStartAngle + 0.5f * knobSweep : knobStartAngle;
+    const bool small = radius <= 12.0f;
+    const float body = radius - 0.5f;
+    const float arcRadius = body - (small ? 2.5f : 3.5f), stroke = small ? 1.5f : 2.0f;
+    const auto bodyArea = juce::Rectangle<float> (body * 2.0f, body * 2.0f).withCentre (c);
+
+    juce::Path cap;
+    cap.addEllipse (bodyArea);
+    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (40, 40, 39).brighter (lit ? 0.12f : 0.0f).withMultipliedAlpha (alpha), bodyArea.getY(),
+                                                       juce::Colour (22, 22, 21).withMultipliedAlpha (alpha), bodyArea.getBottom()));
+    g.fillPath (cap);
+    g.setColour (juce::Colours::black.withAlpha (0.6f * alpha));
+    g.strokePath (cap, juce::PathStrokeType (1.2f));
+    g.setColour (textColour.withAlpha ((lit ? 0.16f : 0.08f) * alpha));
+    strokeRounded (g, arc (c.x, c.y, body - 0.8f, -1.2f, 1.2f), 0.8f); // light catching the top edge
+
+    if (track)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.35f * alpha));
+        strokeRounded (g, arc (c.x, c.y, arcRadius, knobStartAngle, knobStartAngle + knobSweep), stroke);
+
+        if (showValue && std::abs (angle - anchor) > 0.01f)
+        {
+            g.setColour (bright.withAlpha ((lit ? 1.0f : 0.85f) * alpha));
+            strokeRounded (g, arc (c.x, c.y, arcRadius, std::min (anchor, angle), std::max (anchor, angle)), stroke);
+        }
+    }
+
+    juce::Path tick;
+    const float inner = track ? arcRadius - (small ? 4.0f : 6.0f) : body * 0.45f;
+    const float outer = track ? arcRadius - stroke : body - 4.0f;
+    tick.startNewSubPath (c.x + std::sin (angle) * inner, c.y - std::cos (angle) * inner);
+    tick.lineTo (c.x + std::sin (angle) * outer, c.y - std::cos (angle) * outer);
+    g.setColour (bright.withMultipliedAlpha (alpha));
+    strokeRounded (g, tick, small ? 1.4f : 1.8f);
+}
+} // namespace
+
 void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, float amount,
                     const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
                     float levelDb)
@@ -478,49 +536,10 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 return activeKnob == knob || (hover.kind == Kind::knob && hover.index == knob && hover.inPopup == inPopup);
             };
 
-            // A knob: a dark disc with a thin arc just inside its edge for the
-            // value (from the middle for gains), and a short tick where it ends.
-            // Gain has no arc: its rings are round it instead.
             const auto knob = [&] (juce::Point<float> c, float radius, int which, bool lit, bool enabled, float dim = 1.0f, bool track = true)
             {
-                dim *= enabled ? 1.0f : 0.32f;
-                const float position = std::clamp (knobPosition (*band, which), 0.0f, 1.0f);
-                const float angle = knobStartAngle + position * knobSweep;
-                const float anchor = knobIsBipolar (which) ? knobStartAngle + 0.5f * knobSweep : knobStartAngle;
-                const bool small = radius <= 12.0f;
-                const float body = radius - 0.5f;
-                const float arcRadius = body - (small ? 2.5f : 3.5f), stroke = small ? 1.5f : 2.0f;
-                const auto bodyArea = juce::Rectangle<float> (body * 2.0f, body * 2.0f).withCentre (c);
-
-                juce::Path cap;
-                cap.addEllipse (bodyArea);
-                g.setGradientFill (juce::ColourGradient::vertical (faded (juce::Colour (40, 40, 39).brighter (lit ? 0.12f : 0.0f).withMultipliedAlpha (dim)), bodyArea.getY(),
-                                                                   faded (juce::Colour (22, 22, 21).withMultipliedAlpha (dim)), bodyArea.getBottom()));
-                g.fillPath (cap);
-                g.setColour (faded (juce::Colours::black.withAlpha (0.6f * dim)));
-                g.strokePath (cap, juce::PathStrokeType (1.2f));
-                g.setColour (faded (textColour.withAlpha ((lit ? 0.16f : 0.08f) * dim)));
-                strokeRounded (g, arc (c.x, c.y, body - 0.8f, -1.2f, 1.2f), 0.8f); // light catching the top edge
-
-                if (track)
-                {
-                    g.setColour (faded (juce::Colours::black.withAlpha (0.35f * dim)));
-                    strokeRounded (g, arc (c.x, c.y, arcRadius, knobStartAngle, knobStartAngle + knobSweep), stroke);
-
-                    if (enabled && std::abs (angle - anchor) > 0.01f)
-                    {
-                        g.setColour (faded (bright.withAlpha ((lit ? 1.0f : 0.85f) * dim)));
-                        strokeRounded (g, arc (c.x, c.y, arcRadius, std::min (anchor, angle), std::max (anchor, angle)), stroke);
-                    }
-                }
-
-                juce::Path tick;
-                const float inner = track ? arcRadius - (small ? 4.0f : 6.0f) : body * 0.45f;
-                const float outer = track ? arcRadius - stroke : body - 4.0f;
-                tick.startNewSubPath (c.x + std::sin (angle) * inner, c.y - std::cos (angle) * inner);
-                tick.lineTo (c.x + std::sin (angle) * outer, c.y - std::cos (angle) * outer);
-                g.setColour (faded (bright.withMultipliedAlpha (dim)));
-                strokeRounded (g, tick, small ? 1.4f : 1.8f);
+                drawKnob (g, c, radius, knobPosition (*band, which), knobIsBipolar (which), lit, enabled,
+                          amount * dim * (enabled ? 1.0f : 0.32f), track);
             };
 
             // Left column: the band picker and the filter type.
@@ -541,19 +560,12 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
 
             {
                 const bool open = l.popup == PanelPopup::types, hovered = hover.kind == Kind::typeMenu;
+                // The type's shape and name; the whole pill opens the list.
                 pill (l.typePill, open, hovered);
                 g.setColour (faded (bright));
-                strokeRounded (g, typeGlyph ((int) band->type, { l.typePill.getX() + 14.0f, l.typePill.getCentreY() }), 1.4f);
-                text (typeName ((int) band->type), l.typePill.withTrimmedLeft (22.0f).withTrimmedRight (12.0f), 10.0f, faded (bright));
-
-                // A small v: it opens a list.
-                const auto v = juce::Point<float> (l.typePill.getRight() - 9.0f, l.typePill.getCentreY());
-                juce::Path cue;
-                cue.startNewSubPath (v.x - 2.5f, v.y - 1.2f);
-                cue.lineTo (v.x, v.y + 1.3f);
-                cue.lineTo (v.x + 2.5f, v.y - 1.2f);
-                g.setColour (faded (open || hovered ? bright : idle));
-                strokeRounded (g, cue, 1.2f);
+                strokeRounded (g, typeGlyph ((int) band->type, { l.typePill.getX() + 13.0f, l.typePill.getCentreY() }), 1.4f);
+                g.setFont (uiFont (10.0f));
+                g.drawText (typeName ((int) band->type), l.typePill.withTrimmedLeft (25.0f).withTrimmedRight (4.0f), juce::Justification::centredLeft, true);
             }
 
             // Right column: solo, mute, remove, stereo / mono, position.
@@ -604,17 +616,13 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
             // The position: drag or scroll it. A line along its foot shows where
             // round the sphere it is, L at the left, Side at both ends.
             {
+                // A stereo band has no position, so there's nothing to show.
                 const bool enabled = knobEnabled (*band, posKnob), lit = enabled && isLit (posKnob);
-                const float dim = enabled ? 1.0f : 0.32f;
-                pill (l.positionPill, false, lit);
-                if (! enabled)
+                if (enabled)
                 {
-                    text ("L + R", l.positionPill, 10.0f, faded (idle.withMultipliedAlpha (0.6f)));
-                }
-                else
-                {
-                    text (knobText (*band, posKnob), l.positionPill.withTrimmedBottom (4.0f), 10.5f, faded (lit ? bright : bright.withAlpha (0.85f)));
-                    const float y = l.positionPill.getBottom() - 5.0f, x0 = l.positionPill.getX() + 10.0f, x1 = l.positionPill.getRight() - 10.0f;
+                    pill (l.positionPill, false, lit);
+                    text (knobText (*band, posKnob), l.positionPill.withTrimmedBottom (4.0f), 10.0f, faded (lit ? bright : bright.withAlpha (0.85f)));
+                    const float y = l.positionPill.getBottom() - 4.0f, x0 = l.positionPill.getX() + 10.0f, x1 = l.positionPill.getRight() - 10.0f;
                     g.setColour (faded (textColour.withAlpha (0.18f)));
                     g.drawLine (x0, y, x1, y, 1.0f);
                     const float at = x0 + (x1 - x0) * knobPosition (*band, posKnob);
@@ -724,16 +732,18 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                         shown = ringKnob;
                 const float dim = enabled || shown != gainKnob ? 1.0f : 0.32f;
                 caption (shown == gainKnob ? "GAIN" : knobName (*band, shown), { c.x - 40.0f, c.y + 31.0f, 80.0f, 12.0f }, faded (idle.withMultipliedAlpha (dim)));
-                text (knobText (*band, shown), { c.x - 40.0f, c.y + 43.0f, 80.0f, 14.0f }, 10.5f, faded (bright.withMultipliedAlpha (dim)));
+                if (dim == 1.0f) // a cut has no gain: just its name, dimmed
+                    text (knobText (*band, shown), { c.x - 40.0f, c.y + 43.0f, 80.0f, 14.0f }, 10.5f, faded (bright));
 
             }
 
-            // The gear, for the rest of the dynamics.
+            // The gear, for the rest of the dynamics; cuts have none.
+            if (dynamicsUsable)
             {
                 const bool open = l.popup == PanelPopup::dynamics, hovered = hover.kind == Kind::dynamicsMenu;
                 const auto c = l.gear.getCentre();
-                g.setColour (faded ((open || hovered ? bright : idle).withMultipliedAlpha (dynamicsUsable ? 1.0f : 0.32f)));
-                g.drawEllipse (c.x - 3.5f, c.y - 3.5f, 7.0f, 7.0f, 1.3f);
+                g.setColour (faded (open || hovered ? bright : idle.withMultipliedAlpha (0.8f)));
+                g.drawEllipse (c.x - 3.5f, c.y - 3.5f, 7.0f, 7.0f, 1.2f);
                 juce::Path teeth;
                 for (int i = 0; i < 8; ++i)
                 {
@@ -741,7 +751,7 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                     teeth.startNewSubPath (c.x + std::cos (a) * 4.5f, c.y + std::sin (a) * 4.5f);
                     teeth.lineTo (c.x + std::cos (a) * 6.5f, c.y + std::sin (a) * 6.5f);
                 }
-                strokeRounded (g, teeth, 1.6f);
+                strokeRounded (g, teeth, 1.3f);
             }
 
             // An open menu, over everything else.

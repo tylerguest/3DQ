@@ -61,7 +61,8 @@ public:
         bool hasSidechain = false;
         std::array<float, maxBands> gainDb {}, levelDb {};
         std::array<float, 2> outputPeakDb { -120.0f, -120.0f }; // L, R
-        float outputGainDb = 0;
+        std::array<float, 2> inputPeakDb { -120.0f, -120.0f }; // L, R: after the input gain
+        std::array<float, 2> trimGainDb {};                     // input, output
     };
 
     SphereView();
@@ -72,11 +73,11 @@ public:
     std::function<void (LiveAudio&)> readLiveAudio;             // render thread
     std::function<void (int band)> onSoloChanged;               // message thread; -1 = none
     std::function<void (PresetCommand, int preset)> onPresetCommand; // message thread
-    // The output gain (dB), all on the message thread. Edits come between a
-    // gesture's start (true) and end (false).
-    std::function<float()> getOutputGain;
-    std::function<void (float db)> onOutputGainEdited;
-    std::function<void (bool starting)> onOutputGainGesture;
+    // The input (which = 0) and output (1) gains in dB, all on the message
+    // thread. Edits come between a gesture's start (true) and end (false).
+    std::function<float (int which)> getTrimGain;
+    std::function<void (int which, float db)> onTrimGainEdited;
+    std::function<void (int which, bool starting)> onTrimGainGesture;
 
     // Bands pushed from outside (host automation, preset load). Ignored during a drag.
     void setBands (const BandSet& bands);
@@ -139,7 +140,7 @@ private:
         float restCentre = 0, recentreRest = 0;
         bool restCentrePlaced = false, easingRestCentre = false;
         bool rotating = false, pointerInside = false, helpHovered = false, panelOpen = false;
-        bool outputHovered = false, outputDragging = false;
+        int trimHovered = -1, trimDragging = -1; // which gain field: 0 input, 1 output
         bool panelPlaced = false; // the panel is shown or not from the first frame, without sliding
         bool panelHidden = false; // clicked away; picking a band brings it back
         juce::String trackName;
@@ -180,8 +181,8 @@ private:
     PanelTarget panelTargetLocked (juce::Point<float> position) const;
     PresetBarLayout presetLayoutLocked() const;
     bool overHelpButton (juce::Point<float> position) const;
-    bool overOutputField (juce::Point<float> position) const;
-    void editOutputGain (float db, bool wholeGesture);
+    int trimFieldAt (juce::Point<float> position) const; // -1 when over neither
+    void editTrimGain (int which, float db, bool wholeGesture);
 
     void pointerMoved (const juce::MouseEvent&);
 
@@ -205,9 +206,9 @@ private:
     void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected, float levelDb);
     void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
     void drawTitle (juce::Graphics&, const Camera&, int soloed);
-    void drawBottomBar (juce::Graphics&, const Camera&, bool outputHot, const juce::String& trackName, std::optional<juce::Colour> trackColour);
+    void drawBottomBar (juce::Graphics&, const Camera&, int trimHot, const juce::String& trackName, std::optional<juce::Colour> trackColour);
     void drawHelp (juce::Graphics&, const Camera&, bool hovered, float dt);
-    void drawOutputMeter (juce::Graphics&, const Camera&, float dt);
+    void drawLevelMeter (juce::Graphics&, const Camera&, float dt);
 
     juce::OpenGLContext context;
     SphereField field;
@@ -225,9 +226,10 @@ private:
     // it was caught, and what's shown (eased toward the peak).
     std::array<float, maxBands> peakMovement {}, shownMovement {};
     std::array<double, maxBands> peakTime {};
-    // The output meter, per channel: the level shown (it falls back slowly),
-    // the held peak and when it was caught, and when it last went over 0 dB.
-    std::array<float, 2> meterLevel { -120.0f, -120.0f }, meterPeak { -120.0f, -120.0f };
+    // The level meter, per channel: the output level shown (it falls back
+    // slowly) and the input's behind it, the output's held peak and when it
+    // was caught, and when the output last went over 0 dB.
+    std::array<float, 2> meterLevel { -120.0f, -120.0f }, meterInputLevel { -120.0f, -120.0f }, meterPeak { -120.0f, -120.0f };
     std::array<double, 2> meterPeakTime {}, meterClipTime { -10.0, -10.0 };
     float dpr = 1;
     double statsStart = 0, statsCpu = 0;
@@ -244,8 +246,9 @@ private:
     std::optional<GainDrag> gainDrag;
     std::optional<juce::Point<float>> panPosition; // last pointer position while panning
     std::optional<KnobDrag> knobDrag;
-    std::optional<float> outputDragY; // last pointer y while dragging the output gain
-    float outputDragDb = 0;
+    std::optional<float> trimDragY; // last pointer y while dragging a gain field
+    int trimDragWhich = 0;
+    float trimDragDb = 0;
     juce::Point<float> lastPosition;
     std::vector<RotateSample> rotateSamples;
     int wheelBand = -1;

@@ -75,8 +75,9 @@ public:
 
     static BandParamIDs getBandParamIDs (int slot);
 
-    // The output gain, after the EQ (dB). Not part of a preset: it's how loud
-    // this instance plays, not the EQ's shape.
+    // The input gain, before the EQ, and the output gain, after it (dB). Not
+    // part of a preset: they set levels, not the EQ's shape.
+    static inline const juce::String inputGainID { "in" };
     static inline const juce::String outputGainID { "out" };
 
     // enabled = the slot holds a band (it's on the sphere), regardless of mute.
@@ -112,6 +113,10 @@ public:
     // Whether the host has run processBlock in the last moment, so the GUI's
     // meters fall back to silence instead of freezing when playback stops.
     bool isProcessing() const;
+
+    // The loudest input sample on a channel (after the input gain) since this
+    // was last called, which resets it. For the GUI's meter.
+    float takeInputPeak (int channel)    { return inputPeak[(size_t) channel].exchange (0.0f, std::memory_order_relaxed); }
 
     // Whether sound has reached the sidechain input in the last moment: false
     // with the bus off, with nothing routed to it, or once the host stops
@@ -162,8 +167,13 @@ private:
     std::atomic<bool> sidechainHeard { false };
     std::atomic<juce::uint32> lastBlockMs { 0 };           // the same, for the last processBlock
     std::atomic<bool> processedAny { false };
+    using GainGlide = juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative>;
+    std::atomic<float>* inputGain = nullptr;                 // dB
     std::atomic<float>* outputGain = nullptr;                // dB
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outputLevel { 1.0f }; // its linear gain, gliding
+    GainGlide inputLevel { 1.0f }, outputLevel { 1.0f };     // their linear gains, gliding
+    std::array<std::atomic<float>, 2> inputPeak {};
+
+    static void applyGain (GainGlide&, float db, juce::AudioBuffer<float>&);
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     dsp::SphereEq eq;

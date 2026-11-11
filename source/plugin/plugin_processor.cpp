@@ -20,6 +20,7 @@ ThreeDQProcessor::ThreeDQProcessor()
                         .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       state (*this, nullptr, "ThreeDQ", createParameterLayout()) // XML tag names can't start with a digit
 {
+    inputGain = state.getRawParameterValue (inputGainID);
     outputGain = state.getRawParameterValue (outputGainID);
 
     for (int i = 0; i < maxBands; ++i)
@@ -111,9 +112,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
         layout.add (std::move (group));
     }
 
-    layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { outputGainID, 1 }, "Output",
-                                                             juce::NormalisableRange<float> (-maxOutputGainDb, maxOutputGainDb), 0.0f,
-                                                             juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    for (const auto& [id, name] : { std::pair { inputGainID, "Input" }, std::pair { outputGainID, "Output" } })
+        layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id, 1 }, name,
+                                                                 juce::NormalisableRange<float> (-maxTrimGainDb, maxTrimGainDb), 0.0f,
+                                                                 juce::AudioParameterFloatAttributes().withLabel ("dB")));
     return layout;
 }
 
@@ -137,8 +139,11 @@ void ThreeDQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
     eq.prepare (sampleRate);
-    outputLevel.reset (sampleRate, 0.03);
-    outputLevel.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputGain->load()));
+    for (auto [level, db] : { std::pair { &inputLevel, inputGain }, std::pair { &outputLevel, outputGain } })
+    {
+        level->reset (sampleRate, 0.03);
+        level->setCurrentAndTargetValue (juce::Decibels::decibelsToGain (db->load()));
+    }
     analysisSampleRate = sampleRate;
 }
 
@@ -209,26 +214,41 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     if (sidechainLeft != nullptr)
         sidechainRing.push (sidechainLeft, sidechainRight, buffer.getNumSamples());
 
-    eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
-
-    // The output gain, gliding so a change never clicks.
-    outputLevel.setTargetValue (juce::Decibels::decibelsToGain (outputGain->load (std::memory_order_relaxed)));
-    if (outputLevel.isSmoothing() || outputLevel.getTargetValue() != 1.0f)
+    // The input gain, then the input level for the meter.
+    applyGain (inputLevel, inputGain->load (std::memory_order_relaxed), buffer);
+    for (int ch = 0; ch < 2; ++ch)
     {
-        auto* left = buffer.getWritePointer (0);
-        auto* right = buffer.getWritePointer (1);
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
-        {
-            const float gain = outputLevel.getNextValue();
-            left[i] *= gain;
-            right[i] *= gain;
-        }
+        const auto range = buffer.findMinMax (ch, 0, buffer.getNumSamples());
+        const float peak = std::max (-range.getStart(), range.getEnd());
+        auto& held = inputPeak[(size_t) ch];
+        if (peak > held.load (std::memory_order_relaxed))
+            held.store (peak, std::memory_order_relaxed); // a read racing this only loses one block's peak
     }
+
+    eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
+    applyGain (outputLevel, outputGain->load (std::memory_order_relaxed), buffer);
 
     // Feed the GUI's analyser with the processed output.
     outputRing.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
     lastBlockMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
     processedAny.store (true, std::memory_order_relaxed);
+}
+
+// Scales both channels by a gain in dB, gliding to a new one so a change never clicks.
+void ThreeDQProcessor::applyGain (GainGlide& level, float db, juce::AudioBuffer<float>& buffer)
+{
+    level.setTargetValue (juce::Decibels::decibelsToGain (db));
+    if (! level.isSmoothing() && level.getTargetValue() == 1.0f)
+        return;
+
+    auto* left = buffer.getWritePointer (0);
+    auto* right = buffer.getWritePointer (1);
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        const float gain = level.getNextValue();
+        left[i] *= gain;
+        right[i] *= gain;
+    }
 }
 
 bool ThreeDQProcessor::isProcessing() const

@@ -46,15 +46,16 @@ ThreeDQEditor::ThreeDQEditor (ThreeDQProcessor& p)
     sphereView.onPresetCommand = [this] (PresetCommand command, int preset) { handlePresetCommand (command, preset); };
     sphereView.readLiveAudio = [this] (SphereView::LiveAudio& live) { readLiveAudio (live); };
     sphereView.onSoloChanged = [this] (int band) { audioProcessor.setSoloBand (band); };
-    sphereView.getOutputGain = [this] { return audioProcessor.state.getRawParameterValue (ThreeDQProcessor::outputGainID)->load(); };
-    sphereView.onOutputGainEdited = [this] (float db)
+    const auto trimID = [] (int which) { return which == 0 ? ThreeDQProcessor::inputGainID : ThreeDQProcessor::outputGainID; };
+    sphereView.getTrimGain = [this, trimID] (int which) { return audioProcessor.state.getRawParameterValue (trimID (which))->load(); };
+    sphereView.onTrimGainEdited = [this, trimID] (int which, float db)
     {
-        auto* param = audioProcessor.state.getParameter (ThreeDQProcessor::outputGainID);
+        auto* param = audioProcessor.state.getParameter (trimID (which));
         param->setValueNotifyingHost (param->convertTo0to1 (db));
     };
-    sphereView.onOutputGainGesture = [this] (bool starting)
+    sphereView.onTrimGainGesture = [this, trimID] (int which, bool starting)
     {
-        auto* param = audioProcessor.state.getParameter (ThreeDQProcessor::outputGainID);
+        auto* param = audioProcessor.state.getParameter (trimID (which));
         starting ? param->beginChangeGesture() : param->endChangeGesture();
     };
     sphereView.setBands (getBandsFromProcessor());
@@ -346,7 +347,13 @@ void ThreeDQEditor::readLiveAudio (SphereView::LiveAudio& live)
         live.outputPeakDb[ch] = processing ? juce::Decibels::gainToDecibels (peak, -120.0f) : -120.0f;
     }
 
-    live.outputGainDb = audioProcessor.state.getRawParameterValue (ThreeDQProcessor::outputGainID)->load();
+    live.trimGainDb = { audioProcessor.state.getRawParameterValue (ThreeDQProcessor::inputGainID)->load(),
+                        audioProcessor.state.getRawParameterValue (ThreeDQProcessor::outputGainID)->load() };
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const float peak = audioProcessor.takeInputPeak (ch);
+        live.inputPeakDb[(size_t) ch] = processing ? juce::Decibels::gainToDecibels (peak, -120.0f) : -120.0f;
+    }
     live.hasSidechain = audioProcessor.hasSidechainInput();
     if (live.hasSidechain)
     {

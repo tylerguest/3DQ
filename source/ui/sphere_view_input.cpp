@@ -27,7 +27,7 @@ void SphereView::mouseExit (const juce::MouseEvent&)
     const std::lock_guard lock (stateLock);
     state.pointerInside = false;
     state.helpHovered = false;
-    state.outputHovered = false;
+    state.trimHovered = -1;
     state.panelHover = {};
     state.presetHover = {};
     state.lastInteraction = nowSeconds();
@@ -153,8 +153,14 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
         if (target.kind == Kind::none)
         {
             // A click anywhere else closes an open menu, and does only that.
+            // With the dynamics menu up, it puts the panel away too.
             if (state.panelPopup == PanelPopup::none || ! state.panelOpen)
                 return false;
+            if (state.panelPopup == PanelPopup::dynamics)
+            {
+                state.panelHidden = true;
+                state.selected = -1;
+            }
             state.panelPopup = PanelPopup::none;
             return true;
         }
@@ -164,9 +170,11 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
         if (! e.mods.isLeftButtonDown())
             return true;
 
-        // Anything but the menu itself, or the button that opened it, closes it.
+        // The types list closes on anything but itself. The dynamics menu stays
+        // up while the panel is used, until the gear is clicked again, the
+        // types list opens over it, or a click lands off the panel and menus.
         const auto popupBefore = state.panelPopup;
-        if (! target.inPopup)
+        if (! target.inPopup && popupBefore == PanelPopup::types)
             state.panelPopup = PanelPopup::none;
 
         auto* band = state.bands.find (state.selected);
@@ -218,6 +226,11 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
             case Kind::none:
                 break;
         }
+
+        // Moved on to a cut (or no band at all): there are no dynamics to show.
+        if (state.panelPopup == PanelPopup::dynamics)
+            if (const auto* now = state.bands.find (state.selected); now == nullptr || now->isCut())
+                state.panelPopup = PanelPopup::none;
 
         if (changed)
             edited = state.bands;
@@ -354,16 +367,20 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
     if (presetTookPress || overHelpButton (e.position))
         return;
 
-    // The output gain: drag it up or down.
-    if (overOutputField (e.position) && e.mods.isLeftButtonDown() && onOutputGainEdited != nullptr)
+    // The input and output gains: drag their values up or down.
+    if (const int trim = trimFieldAt (e.position); trim >= 0)
     {
-        outputDragY = e.position.y;
-        outputDragDb = getOutputGain != nullptr ? getOutputGain() : 0.0f;
-        if (onOutputGainGesture != nullptr)
-            onOutputGainGesture (true);
+        if (! e.mods.isLeftButtonDown() || onTrimGainEdited == nullptr)
+            return;
+
+        trimDragY = e.position.y;
+        trimDragWhich = trim;
+        trimDragDb = getTrimGain != nullptr ? getTrimGain (trim) : 0.0f;
+        if (onTrimGainGesture != nullptr)
+            onTrimGainGesture (trim, true);
 
         const std::lock_guard lock (stateLock);
-        state.outputDragging = true;
+        state.trimDragging = trim;
         state.lastInteraction = nowSeconds();
         updateCursorLocked();
         return;
@@ -465,21 +482,21 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
 
 void SphereView::pointerMoved (const juce::MouseEvent& e)
 {
-    if (outputDragY.has_value())
+    if (trimDragY.has_value())
     {
-        const float scale = uiScale ((float) getWidth(), (float) getHeight());
+        const float perPixel = trimDbPerPixel / uiScale ((float) getWidth(), (float) getHeight());
         const float fine = e.mods.isShiftDown() ? knobFineFactor : 1.0f;
-        outputDragDb = std::clamp (outputDragDb + (*outputDragY - e.position.y) / scale * outputDbPerPixel * fine, -maxOutputGainDb, maxOutputGainDb);
-        outputDragY = e.position.y;
-        onOutputGainEdited (outputDragDb);
+        trimDragDb = std::clamp (trimDragDb + (*trimDragY - e.position.y) * perPixel * fine, -maxTrimGainDb, maxTrimGainDb);
+        trimDragY = e.position.y;
+        onTrimGainEdited (trimDragWhich, trimDragDb);
         return;
     }
 
     {
         const std::lock_guard lock (stateLock);
-        state.outputHovered = ! pressed.has_value() && ! gainDrag.has_value() && ! panPosition.has_value() && ! knobDrag.has_value()
-                              && ! state.presetMenuOpen && overOutputField (e.position);
-        if (state.outputHovered)
+        const bool free = ! pressed.has_value() && ! gainDrag.has_value() && ! panPosition.has_value() && ! knobDrag.has_value() && ! state.presetMenuOpen;
+        state.trimHovered = free ? trimFieldAt (e.position) : -1;
+        if (state.trimHovered >= 0)
         {
             state.hovered = -1;
             state.helpHovered = false;
@@ -584,17 +601,17 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
 
     publishSolo();
 
-    if (outputDragY.has_value())
+    if (trimDragY.has_value())
     {
-        outputDragY.reset();
-        if (onOutputGainGesture != nullptr)
-            onOutputGainGesture (false);
+        trimDragY.reset();
+        if (onTrimGainGesture != nullptr)
+            onTrimGainGesture (trimDragWhich, false);
     }
 
     const std::lock_guard lock (stateLock);
     const auto now = nowSeconds();
-    state.outputDragging = false;
-    state.outputHovered = overOutputField (e.position);
+    state.trimDragging = -1;
+    state.trimHovered = trimFieldAt (e.position);
 
     const bool clickedEmpty = pressed.has_value() && pressed->band < 0
                               && (! state.rotating || (now - pressed->time < clickMaxSeconds
@@ -645,7 +662,7 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
     state.helpHovered = overHelpButton (e.position);
     state.panelHover = panelTargetLocked (e.position);
     state.presetHover = presetLayoutLocked().hit (e.position, state.presetMenuOpen);
-    state.hovered = state.helpHovered || state.outputHovered || state.panelHover.kind != PanelTarget::Kind::none || state.presetHover.kind != PresetTarget::Kind::none
+    state.hovered = state.helpHovered || state.trimHovered >= 0 || state.panelHover.kind != PanelTarget::Kind::none || state.presetHover.kind != PresetTarget::Kind::none
                         ? -1 : hitBand (toDevice (e.position), cameraLocked());
     updateCursorLocked();
 }
@@ -655,9 +672,9 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
     if (presetTookPress || e.mods.isRightButtonDown() || e.mods.isMiddleButtonDown() || overHelpButton (e.position))
         return;
 
-    if (overOutputField (e.position))
+    if (const int trim = trimFieldAt (e.position); trim >= 0)
     {
-        editOutputGain (0.0f, true);
+        editTrimGain (trim, 0.0f, true);
         return;
     }
 
@@ -756,10 +773,10 @@ void SphereView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
 
     const float delta = wheel.isSmooth ? -raw * 512.0f : (raw > 0.0f ? -100.0f : 100.0f);
 
-    // The output gain: half a dB a notch, a tenth with Shift.
-    if (overOutputField (e.position) && getOutputGain != nullptr)
+    // The input and output gains: 0.2 dB a notch, 0.1 with Shift.
+    if (const int trim = trimFieldAt (e.position); trim >= 0 && getTrimGain != nullptr)
     {
-        editOutputGain (getOutputGain() - delta / 100.0f * (e.mods.isShiftDown() ? 0.1f : 0.5f), true);
+        editTrimGain (trim, getTrimGain (trim) - delta / 100.0f * (e.mods.isShiftDown() ? 0.1f : 0.2f), true);
         return;
     }
 

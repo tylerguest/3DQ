@@ -350,10 +350,11 @@ void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
     }
 }
 
-// The bar along the bottom: a strip whose ends lean in, with the host's track
-// in the middle and the output gain at the right. The ? button has the corner
-// beside it.
-void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool outputHot,
+// The bar along the bottom: a strip whose ends lean in, with the input gain at
+// the left, the host's track in the middle and the output gain at the right.
+// The ? button has the corner beside it. trimHot: the gain field hovered or
+// dragged (0 input, 1 output), or -1.
+void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, int trimHot,
                                 const juce::String& trackName, std::optional<juce::Colour> trackColour)
 {
     const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
@@ -361,7 +362,7 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool ou
     const float top = bottom - bottomBarHeight * unit;
     const float inset = bottomBarSideInset * unit, slant = bottomBarSlant * unit;
 
-    // A trapezoid, crisp-cornered; the edge is drawn up the ends and along
+    // A trapezoid, its corners well rounded; the edge is drawn up the ends and along
     // the top, not along the window's bottom.
     const auto trapezoid = [&] (float bottomLeft, float topLeft, float topRight, float bottomRight, bool closed)
     {
@@ -372,7 +373,7 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool ou
         p.lineTo (bottomRight, bottom + 2.0f * unit);
         if (closed)
             p.closeSubPath();
-        return p.createPathWithRoundedCorners (2.0f * unit);
+        return p.createPathWithRoundedCorners (9.0f * unit);
     };
 
     const auto bar = trapezoid (inset, inset + slant, w - inset - slant, w - inset, true);
@@ -383,13 +384,14 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool ou
     g.strokePath (trapezoid (inset, inset + slant, w - inset - slant, w - inset, false), juce::PathStrokeType (1.0f * unit));
 
     // The track: its name, centred, after a dot in its colour. Long names are
-    // cut short before they reach the output gain.
+    // cut short before they reach the gains.
     if (trackName.isNotEmpty())
     {
         const auto font = uiFont (11.0f * unit);
         const bool dot = trackColour.has_value() && trackColour->getAlpha() > 0;
         const float dotSpace = dot ? 13.0f * unit : 0.0f;
-        const float room = 2.0f * (outputFieldArea (w, bottom, unit).getX() - w / 2.0f - 12.0f * unit) - dotSpace;
+        const float flare = 8.0f * unit, pad = 20.0f * unit; // the tab's, below
+        const float room = 2.0f * (trimFieldArea (w, bottom, unit, 1).getX() - w / 2.0f - flare - pad - 4.0f * unit) - dotSpace;
         const float textWidth = std::min (juce::GlyphArrangement::getStringWidth (font, trackName), room);
 
         if (textWidth > 20.0f * unit)
@@ -402,7 +404,6 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool ou
             // bar's top, its sides rounding out as they go down, darker inside
             // with a shadow under its top edge, and a faint lit rim outside it.
             {
-                const float flare = 8.0f * unit, pad = 20.0f * unit;
                 const float tabLeft = left - pad, tabRight = left + dotSpace + textWidth + pad;
                 const auto outline = [&] (bool closed)
                 {
@@ -442,30 +443,29 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, bool ou
         }
     }
 
-    // The output gain: a caption and its value, as plain text; hovering lights
-    // a soft field behind them.
-    const auto field = outputFieldArea (w, bottom, unit);
-    if (outputHot)
+    // The input and output gains: just their values; hovering or dragging
+    // one lights a soft field behind it.
+    for (int which = 0; which < 2; ++which)
     {
-        g.setColour (textColour.withAlpha (0.06f));
-        g.fillRoundedRectangle (field, 4.0f * unit);
+        const bool hot = trimHot == which;
+        const auto field = trimFieldArea (w, bottom, unit, which);
+        if (hot)
+        {
+            g.setColour (textColour.withAlpha (0.06f));
+            g.fillRoundedRectangle (field, 4.0f * unit);
+        }
+
+        g.setFont (uiFont (11.0f * unit));
+        g.setColour (textColour.withAlpha (hot ? 1.0f : 0.88f));
+        g.drawText (trimText (live.trimGainDb[(size_t) which]), field, juce::Justification::centred, false);
     }
-
-    const auto inner = field.reduced (8.0f * unit, 0.0f);
-    g.setFont (uiFont (11.0f * unit));
-    g.setColour (warmGrey.withAlpha (outputHot ? 0.9f : 0.62f));
-    g.drawText ("Output", inner, juce::Justification::centredLeft, false);
-
-    const float db = std::round (live.outputGainDb * 10.0f) / 10.0f;
-    const auto value = (db > 0.0f ? "+" : "") + juce::String (db == 0.0f ? 0.0f : db, 1) + " dB";
-    g.setColour (textColour.withAlpha (outputHot ? 1.0f : 0.88f));
-    g.drawText (value, inner, juce::Justification::centredRight, false);
 }
 
-// The output level meter, up the right-hand edge above the ? button: one slim
-// bar per channel, a held peak line on each, and a light at the top that
-// stays on for a while after the output goes over 0 dB.
-void SphereView::drawOutputMeter (juce::Graphics& g, const Camera& camera, float dt)
+// The level meter, up the right-hand edge: one slim bar per channel, the
+// output bright over the input dimmed behind it (so where the EQ cuts, the
+// input shows above the output), a held output peak on each, and a light at
+// the top that stays on for a while after the output goes over 0 dB.
+void SphereView::drawLevelMeter (juce::Graphics& g, const Camera& camera, float dt)
 {
     constexpr float floorDb = -60.0f, fallDbPerSecond = 24.0f, peakHoldSeconds = 1.5f, peakFallDbPerSecond = 18.0f, clipHoldSeconds = 2.0f;
     const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
@@ -474,6 +474,7 @@ void SphereView::drawOutputMeter (juce::Graphics& g, const Camera& camera, float
     {
         const float in = live.outputPeakDb[ch];
         meterLevel[ch] = std::max (in, meterLevel[ch] - fallDbPerSecond * dt);
+        meterInputLevel[ch] = std::max (live.inputPeakDb[ch], meterInputLevel[ch] - fallDbPerSecond * dt);
 
         if (in >= meterPeak[ch])
         {
@@ -519,7 +520,15 @@ void SphereView::drawOutputMeter (juce::Graphics& g, const Camera& camera, float
         g.setColour (textColour.withAlpha (0.06f));
         g.fillRoundedRectangle (track, barWidth / 2.0f);
 
-        // The level: pale, brighter as it nears the top.
+        // The input, behind, in its own colour.
+        const float inputY = yFor (meterInputLevel[ch]);
+        if (bottom - inputY > 0.5f)
+        {
+            g.setColour (inputMeterColour.withAlpha (0.85f));
+            g.fillRoundedRectangle (track.withTop (inputY), barWidth / 2.0f);
+        }
+
+        // The output: pale, brighter as it nears the top.
         const float levelY = yFor (meterLevel[ch]);
         if (bottom - levelY > 0.5f)
         {
@@ -551,12 +560,13 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
     const float radius = helpButtonRadius * unit;
     const juce::Rectangle<float> button (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
 
-    g.setColour (graphite.withAlpha (0.7f));
+    // A hairline ring, filling in faintly on hover.
+    g.setColour (textColour.withAlpha (0.06f * helpAmount));
     g.fillEllipse (button);
-    g.setColour (warmGrey.withAlpha (0.45f + 0.4f * helpAmount));
-    g.drawEllipse (button, 1.0f * unit);
-    g.setFont (uiFont (11.0f * unit, true));
-    g.setColour (textColour.withAlpha (0.55f + 0.45f * helpAmount));
+    g.setColour (warmGrey.withAlpha (0.25f + 0.4f * helpAmount));
+    g.drawEllipse (button.reduced (0.5f * unit), 1.0f * unit);
+    g.setFont (uiFont (10.5f * unit));
+    g.setColour (textColour.withAlpha (0.5f + 0.5f * helpAmount));
     g.drawText ("?", button, juce::Justification::centred, false);
 
     if (helpAmount < 0.01f)
@@ -578,7 +588,7 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
         { "Right-click band",           "Mute" },
         { "Shift+right-click band",     "Stereo / mono" },
         { "Shift+double-click band",    "Peak / cuts / shelves" },
-        { "Drag or scroll Output",      "Output gain" },
+        { "Drag bar's dB values",       "Input (left) / output gain" },
         { "Click empty space",          "Hide panel (click a band: show)" },
     }};
 

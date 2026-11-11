@@ -19,6 +19,8 @@ inline const juce::Colour cutColour (229, 72, 77);
 inline const juce::Colour graphite (17, 17, 16);
 inline const juce::Colour textColour (232, 228, 218);
 inline const juce::Colour pale (255, 252, 244);
+// The input's level on the meter, a cool slate against the output's pale.
+inline const juce::Colour inputMeterColour (98, 158, 182);
 
 // The window side at which the panel and the on-screen buttons are drawn 1:1.
 constexpr float uiReferenceSize = 520.0f;

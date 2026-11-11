@@ -122,6 +122,7 @@ public:
             for (int band = 1; band <= maxBands; ++band)
                 for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo", "sc", "atk", "rel", "ratio" })
                     expected.add ("band" + juce::String (band) + "_" + name);
+            expected.add ("in");
             expected.add ("out");
 
             juce::StringArray actual;
@@ -133,7 +134,7 @@ public:
                     allVersion1 = allVersion1 && withId->getVersionHint() == 1;
                 }
 
-            expectEquals (actual.size(), 181);
+            expectEquals (actual.size(), 182);
             expect (actual == expected, "IDs or their order changed");
             expect (allVersion1, "every parameter has version hint 1");
         }
@@ -393,6 +394,18 @@ public:
             run (*p, ones, alsoOnes);
             expectLessThan (ones[0], 0.6f, "it starts from where it was");
             expectGreaterThan (ones[511], ones[0], "and glides up");
+        }
+
+        beginTest ("Input gain scales what the EQ hears, and the input meter reads it");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::inputGainID, 6.0f);
+            const auto in = sine (1000.0, sr, 48000);
+            auto left = in, right = in;
+            run (*p, left, right);
+            expectWithinAbsoluteError (gainDb (in, left), 6.0, 0.05);
+            expectWithinAbsoluteError (juce::Decibels::gainToDecibels (p->takeInputPeak (0)), juce::Decibels::gainToDecibels (0.25f) + 6.0f, 0.1f);
+            expectEquals (p->takeInputPeak (0), 0.0f, "taking it resets it");
         }
 
         beginTest ("Keeps the host's track name and colour");

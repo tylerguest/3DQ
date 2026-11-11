@@ -213,23 +213,26 @@ bool SphereView::overHelpButton (juce::Point<float> position) const
     return position.getDistanceFrom (centre) <= (helpButtonRadius + 3.0f) * scale;
 }
 
-bool SphereView::overOutputField (juce::Point<float> position) const
+int SphereView::trimFieldAt (juce::Point<float> position) const
 {
     const float scale = uiScale ((float) getWidth(), (float) getHeight());
-    return outputFieldArea ((float) getWidth(), (float) getHeight(), scale).expanded (2.0f * scale).contains (position);
+    for (int which = 0; which < 2; ++which)
+        if (trimFieldArea ((float) getWidth(), (float) getHeight(), scale, which).expanded (2.0f * scale).contains (position))
+            return which;
+    return -1;
 }
 
-// Sets the output gain, clamped; wholeGesture wraps it in a gesture of its own.
-void SphereView::editOutputGain (float db, bool wholeGesture)
+// Sets a gain, clamped; wholeGesture wraps it in a gesture of its own.
+void SphereView::editTrimGain (int which, float db, bool wholeGesture)
 {
-    if (onOutputGainEdited == nullptr)
+    if (onTrimGainEdited == nullptr)
         return;
 
-    if (wholeGesture && onOutputGainGesture != nullptr)
-        onOutputGainGesture (true);
-    onOutputGainEdited (std::clamp (db, -maxOutputGainDb, maxOutputGainDb));
-    if (wholeGesture && onOutputGainGesture != nullptr)
-        onOutputGainGesture (false);
+    if (wholeGesture && onTrimGainGesture != nullptr)
+        onTrimGainGesture (which, true);
+    onTrimGainEdited (which, std::clamp (db, -maxTrimGainDb, maxTrimGainDb));
+    if (wholeGesture && onTrimGainGesture != nullptr)
+        onTrimGainGesture (which, false);
 }
 
 // Keeps the sphere's centre inside the window, so it can never be lost off-screen.
@@ -295,7 +298,7 @@ void SphereView::updateCursorLocked()
 {
     using Kind = PanelTarget::Kind;
 
-    if (knobDrag.has_value() || outputDragY.has_value())
+    if (knobDrag.has_value() || trimDragY.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
     else if (state.presetHover.kind == PresetTarget::Kind::menuBackground)
         setMouseCursor (juce::MouseCursor::NormalCursor);
@@ -307,7 +310,7 @@ void SphereView::updateCursorLocked()
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
     else if (state.helpHovered)
         setMouseCursor (juce::MouseCursor::NormalCursor);
-    else if (state.outputHovered)
+    else if (state.trimHovered >= 0)
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
     else if (gainDrag.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
@@ -351,7 +354,8 @@ void SphereView::renderOpenGL()
     BandSet bands;
     Camera camera;
     int hovered, dragged, selected, soloed, activeKnob;
-    bool helpHovered, panelOpen, outputHot;
+    bool helpHovered, panelOpen;
+    int trimHot;
     float panelAmount;
     PanelTarget panelHover;
     float selectedLevelDb = -120.0f;
@@ -463,7 +467,7 @@ void SphereView::renderOpenGL()
         hovered = state.hovered;
         dragged = state.dragged;
         helpHovered = state.helpHovered;
-        outputHot = state.outputHovered || state.outputDragging;
+        trimHot = state.trimDragging >= 0 ? state.trimDragging : state.trimHovered;
         // The panel floats over the view whenever there's a band for it to show,
         // unless it's been clicked away.
         const bool wantPanel = state.bands.begin() != state.bands.end() && ! state.panelHidden;
@@ -540,10 +544,10 @@ void SphereView::renderOpenGL()
         juce::Graphics g (*overlay);
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
-        drawBottomBar (g, camera, outputHot, trackName, trackColour);
+        drawBottomBar (g, camera, trimHot, trackName, trackColour);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup), dpr, panelAmount,
                        bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb);
-        drawOutputMeter (g, camera, dt);
+        drawLevelMeter (g, camera, dt);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));
         drawPresetBar (g, presetLayout, dpr, *presetInfo, presetHover, presetMenuAmount);

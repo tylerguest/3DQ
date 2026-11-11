@@ -29,8 +29,8 @@ constexpr float helpButtonRadius = 9.0f;
 constexpr float helpButtonInset = 24.0f;  // from the window's right edge to the button's centre; it sits mid-bar
 constexpr float bottomBarSideInset = 44.0f; // the bar's lower corners, in from the window's sides, leaving the ? its corner
 constexpr float bottomBarSlant = 13.0f;     // how far its ends lean in towards the top
-constexpr float outputFieldWidth = 96.0f, outputFieldHeight = 18.0f;
-constexpr float outputDbPerPixel = 0.1f;
+constexpr float trimFieldWidth = 60.0f, trimFieldHeight = 18.0f;
+constexpr float trimDbPerPixel = 0.1f;
 constexpr float knobPixelsFullRange = 200.0f;
 constexpr double peakHoldSeconds = 1.0;  // the GR meter holds a peak this long,
 constexpr float peakFallSeconds = 0.6f;  // then eases back over about this long;
@@ -44,11 +44,19 @@ inline juce::Point<float> helpButtonCentre (float width, float height, float uni
     return { width - helpButtonInset * unit, height - bottomBarHeight / 2.0f * unit };
 }
 
-inline juce::Rectangle<float> outputFieldArea (float width, float height, float unit)
+// The input gain (which = 0) at the bar's left, the output gain (1) at its right.
+inline juce::Rectangle<float> trimFieldArea (float width, float height, float unit, int which)
 {
-    const float right = width - (bottomBarSideInset + bottomBarSlant + 6.0f) * unit;
-    return { right - outputFieldWidth * unit, height - (bottomBarHeight + outputFieldHeight) / 2.0f * unit,
-             outputFieldWidth * unit, outputFieldHeight * unit };
+    const float edge = (bottomBarSideInset + bottomBarSlant + 6.0f) * unit;
+    const float x = which == 0 ? edge : width - edge - trimFieldWidth * unit;
+    return { x, height - (bottomBarHeight + trimFieldHeight) / 2.0f * unit, trimFieldWidth * unit, trimFieldHeight * unit };
+}
+
+// A gain as the bottom bar shows it: "+1.5 dB", "0.0 dB".
+inline juce::String trimText (float db)
+{
+    db = std::round (db * 10.0f) / 10.0f;
+    return (db > 0.0f ? "+" : "") + juce::String (db == 0.0f ? 0.0f : db, 1) + " dB";
 }
 
 inline double nowSeconds()    { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }
