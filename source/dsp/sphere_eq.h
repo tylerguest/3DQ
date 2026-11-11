@@ -74,7 +74,7 @@ public:
         for (auto& b : bands)
         {
             b.snapToTarget = true;
-            b.attackMs = b.releaseMs = -1.0; // recompute the detector's coefficients for this rate
+            setTiming (b, b.attackMs, b.releaseMs); // the same times at the new rate
         }
         reset();
     }
@@ -113,13 +113,7 @@ public:
         const double attackMs  = std::clamp ((double) p.attackMs, (double) minAttackMs, (double) maxAttackMs);
         const double releaseMs = std::clamp ((double) p.releaseMs, (double) minReleaseMs, (double) maxReleaseMs);
         if (attackMs != b.attackMs || releaseMs != b.releaseMs)
-        {
-            // Per-sample one-pole coefficients.
-            b.attackMs = attackMs;
-            b.releaseMs = releaseMs;
-            b.attackCoeff  = 1.0 - std::exp (-1.0 / (attackMs * 0.001 * sampleRate));
-            b.releaseCoeff = 1.0 - std::exp (-1.0 / (releaseMs * 0.001 * sampleRate));
-        }
+            setTiming (b, attackMs, releaseMs);
 
         const int order = ! isCutType (p.type) ? 0 : std::clamp (p.slopeDbPerOct / 6, 1, 2 * maxSections);
         if (p.type != b.type || order != b.order || p.stereo != b.stereo)
@@ -150,9 +144,14 @@ public:
     // In-place stereo processing. sidechainLeft / Right: the sidechain input for
     // the same samples, or null when there is none (a mono sidechain passes its
     // one channel as both).
+    // A mono sidechain passes the same pointer for both sides.
     void process (float* left, float* right, int numSamples,
                   const float* sidechainLeft = nullptr, const float* sidechainRight = nullptr)
     {
+        // A mono key has no stereo position, so every band hears all of it;
+        // projected onto the Side axis it would cancel to nothing.
+        const bool monoKey = sidechainLeft != nullptr && sidechainLeft == sidechainRight;
+
         for (int start = 0; start < numSamples; start += subBlockSize)
         {
             const int n = std::min (subBlockSize, numSamples - start);
@@ -221,7 +220,10 @@ public:
                     const double c = uL * left[i] + uR * right[i];
 
                     if (dynamic)
-                        followEnvelope (b, std::abs (runSection (b.detector, b.detector.z1, b.detector.z2, uL * detectL + uR * detectR)));
+                    {
+                        const double heard = b.externalSidechain && monoKey ? detectL : uL * detectL + uR * detectR;
+                        followEnvelope (b, std::abs (runSection (b.detector, b.detector.z1, b.detector.z2, heard)));
+                    }
 
                     double y = c;
                     for (int k = 0; k < numSections; ++k)
@@ -290,7 +292,7 @@ private:
         // Dynamics
         double rangeDb = 0.0, thresholdDb = -30.0;
         double ratioSlope = 0.5; // dB of gain change per dB over threshold, from the ratio (2:1)
-        double attackMs = -1.0, releaseMs = -1.0; // what the coefficients were made for
+        double attackMs = defaultAttackMs, releaseMs = defaultReleaseMs; // what the coefficients were made for
         double attackCoeff = 1.0, releaseCoeff = 1.0;
         double envelope = 0.0;  // side-chain peak level (linear)
         double dynamicDb = 0.0; // current dynamic gain movement
@@ -306,6 +308,15 @@ private:
         Biquad filter;
         std::array<float, subBlockSize> inputLeft {}, inputRight {}; // the EQ's input, this sub-block
     };
+
+    // Per-sample one-pole coefficients for the detector's attack and release.
+    void setTiming (Band& b, double attackMs, double releaseMs) const
+    {
+        b.attackMs = attackMs;
+        b.releaseMs = releaseMs;
+        b.attackCoeff  = 1.0 - std::exp (-1.0 / (attackMs * 0.001 * sampleRate));
+        b.releaseCoeff = 1.0 - std::exp (-1.0 / (releaseMs * 0.001 * sampleRate));
+    }
 
     void followEnvelope (Band& b, double level) const
     {

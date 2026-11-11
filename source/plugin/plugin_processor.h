@@ -105,8 +105,10 @@ public:
     void copyRecentSidechain (float* left, float* right, int numSamples) const   { sidechainRing.copyRecent (left, right, numSamples); }
     double getAnalysisSampleRate() const { return analysisSampleRate.load(); }
 
-    // Whether the host is feeding the sidechain input right now.
-    bool hasSidechainInput() const   { return sidechainConnected.load (std::memory_order_relaxed); }
+    // Whether sound has reached the sidechain input in the last moment: false
+    // with the bus off, with nothing routed to it, or once the host stops
+    // processing (so the GUI never shows a frozen sidechain).
+    bool hasSidechainInput() const;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -142,7 +144,8 @@ private:
     std::array<BandParamPointers, maxBands> bandParams;
 
     AnalysisRing outputRing, sidechainRing;
-    std::atomic<bool> sidechainConnected { false };
+    std::atomic<juce::uint32> lastSidechainSoundMs { 0 }; // Time::getMillisecondCounter() when it was last heard
+    std::atomic<bool> sidechainHeard { false };
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     dsp::SphereEq eq;

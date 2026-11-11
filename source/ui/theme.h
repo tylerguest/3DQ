@@ -35,6 +35,16 @@ inline float uiScale (float width, float height)
     return std::max (1.0f, std::sqrt (std::min (width, height) / uiReferenceSize));
 }
 
+// Attack and release times: "2.0 ms", "90 ms", "1.20 s".
+inline juce::String formatMs (float ms)
+{
+    if (ms >= 1000.0f)
+        return juce::String (ms / 1000.0f, 2) + " s";
+    return juce::String (ms, ms < 10.0f ? 1 : 0) + " ms";
+}
+
+inline juce::String formatRatio (float ratio)    { return juce::String (ratio, ratio < 10.0f ? 1 : 0) + ":1"; }
+
 inline juce::String formatFreq (float freq)
 {
     if (freq >= 1000.0f)

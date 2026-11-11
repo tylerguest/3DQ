@@ -251,6 +251,27 @@ public:
             expect (again == saved, "saving the restored state gives the same bytes");
         }
 
+        beginTest ("A state saved before a parameter existed loads it at its default");
+        {
+            ThreeDQProcessor a;
+            addPeak (a, 2, 800.0f, 4.0f);
+            auto tree = a.state.copyState();
+            const auto ids = ThreeDQProcessor::getBandParamIDs (2);
+            for (const auto& missing : { ids.attack, ids.ratio })
+                tree.removeChild (tree.getChildWithProperty ("id", missing), nullptr);
+
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), old);
+
+            ThreeDQProcessor b;
+            set (b, ids.attack, 150.0f);
+            set (b, ids.ratio, 12.0f);
+            b.setStateInformation (old.getData(), (int) old.getSize());
+            expectWithinAbsoluteError (get (b, ids.attack), defaultAttackMs, 0.01f, "attack");
+            expectWithinAbsoluteError (get (b, ids.ratio), defaultRatio, 0.01f, "ratio");
+            expectWithinAbsoluteError (get (b, ids.gain), 4.0f, 0.01f, "what the state has still loads");
+        }
+
         beginTest ("Garbage or foreign state is ignored");
         {
             ThreeDQProcessor p;
@@ -302,10 +323,11 @@ public:
             auto left = quiet, right = quiet;
             runWithSidechain (*p, left, right, { silence, silence });
             expectWithinAbsoluteError (gainDb (quiet, left), 0.0, 0.05, "silent sidechain: static");
-            expect (p->hasSidechainInput());
+            expect (! p->hasSidechainInput(), "the bus is on, but nothing reaches it");
 
             left = quiet; right = quiet;
             runWithSidechain (*p, left, right, { loud, loud });
+            expect (p->hasSidechainInput(), "sound on the sidechain");
             expectLessThan (gainDb (quiet, left), -5.0, "loud sidechain: the quiet track still ducks");
             expectLessThan (p->getLiveLevelDb (0), 0.0f);
             expectGreaterThan (p->getLiveLevelDb (0), -30.0f, "the level shown is the sidechain's");
@@ -343,6 +365,16 @@ public:
             run (*p, left, right);
             expectWithinAbsoluteError (gainDb (loud, left), 0.0, 0.05, "its own loud signal doesn't move it");
             expect (! p->hasSidechainInput());
+        }
+
+        beginTest ("Sidechain: it stops counting as there soon after the host stops processing");
+        {
+            auto p = makeSidechainedProcessor();
+            auto left = sine (1000.0, sr, 4800), right = left;
+            runWithSidechain (*p, left, right, { left, right });
+            expect (p->hasSidechainInput());
+            juce::Thread::sleep (600);
+            expect (! p->hasSidechainInput(), "no blocks for 600 ms: the GUI stops showing a frozen sidechain");
         }
 
         beginTest ("Sidechain: the analyser gets the latest sidechain input");

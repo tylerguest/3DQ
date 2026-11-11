@@ -6,6 +6,7 @@
   ==============================================================================
 */
 
+#include <algorithm>
 #include "plugin_processor.h"
 #include "plugin_editor.h"
 
@@ -170,7 +171,20 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         sidechainRight = sidechain.getReadPointer (sidechain.getNumChannels() > 1 ? 1 : 0);
     }
 
-    sidechainConnected.store (sidechainLeft != nullptr, std::memory_order_relaxed);
+    if (sidechainLeft != nullptr)
+    {
+        // Anything above about -100 dBFS counts as sound arriving.
+        constexpr float audible = 1.0e-5f;
+        const auto n = (size_t) buffer.getNumSamples();
+        const bool sound = std::any_of (sidechainLeft, sidechainLeft + n, [] (float x) { return std::abs (x) > audible; })
+                        || std::any_of (sidechainRight, sidechainRight + n, [] (float x) { return std::abs (x) > audible; });
+
+        if (sound)
+        {
+            lastSidechainSoundMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
+            sidechainHeard.store (true, std::memory_order_relaxed);
+        }
+    }
 
     for (int i = 0; i < maxBands; ++i)
     {
@@ -192,6 +206,14 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     // Feed the GUI's analyser with the processed output.
     outputRing.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+}
+
+bool ThreeDQProcessor::hasSidechainInput() const
+{
+    // Held briefly, so a gap between notes doesn't flicker it off.
+    constexpr juce::uint32 holdMs = 500;
+    return sidechainHeard.load (std::memory_order_relaxed)
+        && juce::Time::getMillisecondCounter() - lastSidechainSoundMs.load (std::memory_order_relaxed) < holdMs;
 }
 
 void ThreeDQProcessor::AnalysisRing::push (const float* left, const float* right, int numSamples)
@@ -239,9 +261,19 @@ void ThreeDQProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void ThreeDQProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (state.state.getType()))
-            state.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr || ! xml->hasTagName (state.state.getType()))
+        return;
+
+    const auto restored = juce::ValueTree::fromXml (*xml);
+    state.replaceState (restored);
+
+    // A state saved before a parameter existed doesn't mention it, and JUCE
+    // would leave it at whatever it was. It belongs at its default instead.
+    for (auto* param : getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            if (! restored.getChildWithProperty ("id", ranged->getParameterID()).isValid())
+                ranged->setValueNotifyingHost (ranged->getDefaultValue());
 }
 
 } // namespace threedq

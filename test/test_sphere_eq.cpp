@@ -381,6 +381,46 @@ public:
             expectLessThan (eq->getCurrentGainDb (0), -5.0f, "a stereo band hears either channel");
         }
 
+        beginTest ("A mono sidechain reaches a band at any position, Side included");
+        for (float pos : { 0.0f, 180.0f, 90.0f })
+        {
+            auto eq = makeEq();
+            auto p = peak (1000.0f, 0.0f, pos);
+            p.rangeDb = -12.0f;
+            p.thresholdDb = -30.0f;
+            p.externalSidechain = true;
+            eq->setBand (0, p);
+
+            auto quiet = mid (sine (1000.0, sr, n, 0.0005f));
+            const auto key = sine (1000.0, sr, n, 0.5f);
+            for (int start = 0; start < n; start += 512)
+                eq->process (quiet.left.data() + start, quiet.right.data() + start, std::min (512, n - start),
+                             key.data() + start, key.data() + start); // one channel feeds both sides
+            expectLessThan (eq->getCurrentGainDb (0), -5.0f, "position " + juce::String (pos));
+        }
+
+        beginTest ("A new sample rate keeps the band's attack and release times");
+        {
+            auto p = peak (1000.0f, 0.0f);
+            p.rangeDb = -12.0f;
+            p.thresholdDb = -30.0f;
+            p.attackMs = 50.0f;
+            const double rate = 96000.0;
+            const auto burst = mid (sine (1000.0, rate, (int) (0.02 * rate), 0.5f));
+
+            auto fresh = makeEq (rate);
+            fresh->setBand (0, p);
+            run (*fresh, burst);
+
+            auto moved = makeEq (sr);
+            moved->setBand (0, p);
+            moved->prepare (rate); // the host changes rate; the band isn't set again
+            run (*moved, burst);
+
+            expectWithinAbsoluteError (moved->getCurrentGainDb (0), fresh->getCurrentGainDb (0), 1.0e-4f);
+            expectLessThan (fresh->getCurrentGainDb (0), -0.5f, "the burst does move the band");
+        }
+
         beginTest ("Solo plays what the band works on, from the EQ's input");
         {
             auto eq = makeEq();

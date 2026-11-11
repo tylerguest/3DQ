@@ -39,16 +39,18 @@ void SphereField::addRingDot (Vec3 dir, const BandSet& bands, const BandDirectio
 // it for a dynamic cut, so you can see how far the band can go as it moves.
 // A peak gets a small ring round its centre; a stereo peak or a shelf, a ring
 // round the sphere at its latitude (a shelf's, a little toward its pole).
-void SphereField::addRangeMarker (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+void SphereField::addRangeMarker (const Band& b, BandSet& full, const BandDirections& dirs, const Camera& camera,
                                   float time, SpriteList& out) const
 {
     if (b.muted || b.isCut() || b.range == 0.0f)
         return;
 
-    auto full = bands;
+    // Draw with this band at its full range, then put it back.
     auto* reach = full.find (b.id);
+    const Band before = *reach;
     reach->hasLiveGain = true;
     reach->liveGainDb = std::clamp (b.gainDb + b.range, -maxGainDb, maxGainDb);
+    const auto restore = [&] { *reach = before; };
 
     const auto& style = ringStyle (b.range > 0 ? std::max (b.range, 6.0f) : std::min (b.range, -6.0f));
     constexpr float alpha = 0.5f;
@@ -70,6 +72,7 @@ void SphereField::addRangeMarker (const Band& b, const BandSet& bands, const Ban
             addRingDot ({ d.x * cr + east.x * ce + north.x * cn, d.y * cr + east.y * ce + north.y * cn, d.z * cr + east.z * ce + north.z * cn },
                         full, dirs, camera, style, alpha, out);
         }
+        restore();
         return;
     }
 
@@ -84,6 +87,7 @@ void SphereField::addRangeMarker (const Band& b, const BandSet& bands, const Ban
         if (overlap > 0.02f)
             addRingDot ({ cosLat * std::sin (lon), sinLat, cosLat * std::cos (lon) }, full, dirs, camera, style, alpha * overlap, out);
     }
+    restore();
 }
 
 // Particles round a circle of constant latitude, only where the band acts.

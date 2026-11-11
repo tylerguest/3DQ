@@ -70,7 +70,8 @@ private:
                        float time, float strength, SpriteList& out);
     void addLatitudeRing (const Band& b, float lat, float phase, const SpriteStyle& style, float fade, const BandSet& bands,
                           const BandDirections& dirs, const Camera& camera, SpriteList& out) const;
-    void addRangeMarker (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+    // reach: a copy of the bands to work in; the band is put back as it was.
+    void addRangeMarker (const Band& b, BandSet& reach, const BandDirections& dirs, const Camera& camera,
                          float time, SpriteList& out) const;
     void addRingDot (Vec3 dir, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
                      const SpriteStyle& style, float alpha, SpriteList& out) const;

@@ -335,9 +335,12 @@ void SphereView::renderOpenGL()
     {
         const std::lock_guard lock (stateLock);
 
+        std::array<bool, maxBands> meterInUse {};
+
         for (auto& b : state.bands)
         {
-            b.hasLiveGain = b.range != 0.0f && ! b.muted;
+            b.hasLiveGain = b.range != 0.0f && ! b.muted && ! b.isCut();
+            meterInUse[(size_t) b.id] = b.hasLiveGain;
             b.liveGainDb = live.gainDb[(size_t) b.id];
             state.liveLevelDb[(size_t) b.id] = live.levelDb[(size_t) b.id];
 
@@ -362,6 +365,12 @@ void SphereView::renderOpenGL()
             shown += (peak - shown) * (1.0f - std::exp (-dt / meterGlideSeconds));
             b.peakMovementDb = shown;
         }
+
+        // A meter with no dynamic band behind it starts from rest, so a slot
+        // reused for a new band never shows the old one's movement.
+        for (size_t id = 0; id < (size_t) maxBands; ++id)
+            if (! meterInUse[id])
+                peakMovement[id] = shownMovement[id] = 0.0f;
 
         // Inertia after a drag, then a slow auto-rotation that keeps going
         // until the user clicks. After a click it resumes once the pointer has

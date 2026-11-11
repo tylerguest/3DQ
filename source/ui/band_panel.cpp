@@ -36,15 +36,6 @@ const char* pageName (int page)    { return page == (int) PanelPage::eq ? "EQ" :
 float fromLog (float t, float lo, float hi)     { return lo * std::pow (hi / lo, std::clamp (t, 0.0f, 1.0f)); }
 float toLog (float v, float lo, float hi)       { return std::log (v / lo) / std::log (hi / lo); }
 
-juce::String formatMs (float ms)
-{
-    if (ms >= 1000.0f)
-        return juce::String (ms / 1000.0f, 2) + " s";
-    return juce::String (ms, ms < 10.0f ? 1 : 0) + " ms";
-}
-
-juce::String formatRatio (float ratio)    { return juce::String (ratio, ratio < 10.0f ? 1 : 0) + ":1"; }
-
 // How far the band's gain has moved from its static gain, peak-held so it can
 // be read.
 float liveMovement (const Band& b)    { return b.hasLiveGain ? b.peakMovementDb : 0.0f; }
@@ -94,7 +85,7 @@ juce::String knobText (const Band& b, int knob)
 {
     if (knob == liveGainMeter)
     {
-        if (b.isCut() || b.range == 0.0f)
+        if (! b.hasLiveGain) // a static band, a cut, or muted
             return "-";
 
         // Always one decimal, so the number keeps its width as it changes.

@@ -685,10 +685,11 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     }
 
     const auto dirs = directionsOf (bands);
+    auto reach = bands; // one copy a frame for every band's range marker
     for (const auto& b : bands)
     {
         addVortex (b, bands, dirs, camera, time, dt, out);
-        addRangeMarker (b, bands, dirs, camera, time, out);
+        addRangeMarker (b, reach, dirs, camera, time, out);
     }
 }
 
