@@ -31,6 +31,16 @@ Stereo run (dsp::SphereEq& eq, Stereo in, int blockSize = 512)
     return in;
 }
 
+// The same, with the detector of sidechained bands hearing `sidechain`.
+Stereo runWithSidechain (dsp::SphereEq& eq, Stereo in, const Stereo& sidechain, int blockSize = 512)
+{
+    const int n = (int) in.left.size();
+    for (int start = 0; start < n; start += blockSize)
+        eq.process (in.left.data() + start, in.right.data() + start, std::min (blockSize, n - start),
+                    sidechain.left.data() + start, sidechain.right.data() + start);
+    return in;
+}
+
 Stereo mid (const std::vector<float>& x)      { return { x, x }; }
 
 Stereo side (const std::vector<float>& x)
@@ -266,6 +276,47 @@ public:
             eq->setBand (0, p);
             run (*eq, mid (sine (1000.0, sr, n, 0.5f)));
             expectWithinAbsoluteError (eq->getCurrentGainDb (0), 6.0f, 0.01f);
+        }
+
+        beginTest ("A sidechained band listens to the sidechain, not its own signal");
+        {
+            auto eq = makeEq();
+            auto p = peak (1000.0f, 0.0f);
+            p.rangeDb = -12.0f;
+            p.thresholdDb = -30.0f;
+            p.externalSidechain = true;
+            eq->setBand (0, p);
+
+            const auto loud = mid (sine (1000.0, sr, n, 0.5f)), quiet = mid (sine (1000.0, sr, n, 0.0005f));
+            runWithSidechain (*eq, loud, quiet);
+            expectWithinAbsoluteError (eq->getCurrentGainDb (0), 0.0f, 0.05f, "quiet sidechain: a loud track stays put");
+
+            runWithSidechain (*eq, quiet, loud);
+            expectLessThan (eq->getCurrentGainDb (0), -5.0f, "loud sidechain: a quiet track ducks");
+            expectGreaterOrEqual (eq->getCurrentGainDb (0), -12.01f);
+            expectGreaterThan (eq->getCurrentLevelDb (0), -30.0f, "the level is the sidechain's");
+
+            run (*eq, loud);
+            expectWithinAbsoluteError (eq->getCurrentGainDb (0), 0.0f, 0.05f, "no sidechain at all: back to static");
+        }
+
+        beginTest ("A sidechained band hears the sidechain on its own axis only");
+        {
+            auto eq = makeEq();
+            auto p = peak (1000.0f, 0.0f); // Mid
+            p.rangeDb = -12.0f;
+            p.thresholdDb = -30.0f;
+            p.externalSidechain = true;
+            eq->setBand (0, p);
+            const auto quiet = mid (sine (1000.0, sr, n, 0.0005f));
+
+            runWithSidechain (*eq, quiet, side (sine (1000.0, sr, n, 0.5f)));
+            expectWithinAbsoluteError (eq->getCurrentGainDb (0), 0.0f, 0.05f, "a Side-only sidechain doesn't reach a Mid band");
+
+            p.stereo = true;
+            eq->setBand (0, p);
+            runWithSidechain (*eq, quiet, side (sine (1000.0, sr, n, 0.5f)));
+            expectLessThan (eq->getCurrentGainDb (0), -5.0f, "a stereo band hears either channel");
         }
 
         beginTest ("Solo plays what the band works on, from the EQ's input");

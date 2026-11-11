@@ -131,6 +131,7 @@ public:
             b.type = FilterType::highShelf;
             b.q = 1.7f;
             b.stereo = true;
+            b.externalSidechain = true;
             auto cut = bandAt (5, 80.0f, 0.0f);
             cut.type = FilterType::lowCut;
             cut.slope = 36;
@@ -152,13 +153,13 @@ public:
                 expectWithinAbsoluteError (x->lon, 1.1f, 1.0e-4f);
                 expectWithinAbsoluteError (x->gainDb, -7.5f, 1.0e-4f);
                 expectWithinAbsoluteError (x->q, 1.7f, 1.0e-4f);
-                expect (x->muted && x->stereo && x->type == FilterType::highShelf);
+                expect (x->muted && x->stereo && x->externalSidechain && x->type == FilterType::highShelf);
                 expectWithinAbsoluteError (x->range, -6.0f, 1.0e-4f);
                 expectWithinAbsoluteError (x->threshold, -24.0f, 1.0e-4f);
             }
 
             const auto* y = bank.bands().find (5);
-            expect (y != nullptr && y->type == FilterType::lowCut && y->slope == 36);
+            expect (y != nullptr && y->type == FilterType::lowCut && y->slope == 36 && ! y->externalSidechain);
         }
 
         beginTest ("Names: Default is reserved however it's written; names are made file-safe");
@@ -209,6 +210,17 @@ public:
             bank.syncFromHost (one, "");
             bank.edited (one);
             expect (! bank.info().canUndo);
+        }
+
+        beginTest ("Undo: switching a band to the sidechain is an edit");
+        {
+            Fixture fx;
+            PresetBank bank (fx.storage());
+            bank.syncFromHost (one, "");
+            auto sidechained = one;
+            sidechained.items[0].externalSidechain = true;
+            bank.edited (sidechained);
+            expect (bank.info().canUndo && bank.info().dirty);
         }
 
         beginTest ("Undo: loading a preset can be undone");

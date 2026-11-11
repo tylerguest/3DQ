@@ -130,6 +130,13 @@ constexpr float layerAttack = 0.06f, layerRelease = 0.5f;
 constexpr float layerAlpha = 1.1f;
 constexpr float layerShown = 0.015f; // weaker than this, it isn't drawn
 
+// The sidechain's ghost shell: how far outside the surface it floats (sphere
+// radii; louder floats further), how faint it is alone, and how bright where
+// it meets loud audio on this track.
+constexpr float ghostLift = 0.07f, ghostTravel = 0.05f;
+constexpr float ghostAlpha = 0.22f, maskAlpha = 0.95f;
+constexpr float maskShown = 0.3f; // clash past this draws in the mask colour
+
 float randomFloat()
 {
     static thread_local juce::Random random;
@@ -255,6 +262,9 @@ void SphereField::buildStyles()
     }
 
     midStyle = makeStyle ({ 255, 252, 244 }, 1.0f);
+    // Cool and pale, so the ghost never reads as the track's own spectrum, or as boost or cut.
+    ghostStyle = makeStyle ({ 160, 182, 255 }, 0.0f);
+    maskStyle = makeStyle ({ 236, 242, 255 }, 0.0f);
 
     auto rampColour = [] (const std::array<RGB, 3>& ramp, float t)
     {
@@ -277,11 +287,14 @@ const SpriteStyle& SphereField::ringStyle (float db) const
     return db > 0 ? boostRingStyles[index] : cutRingStyles[index];
 }
 
-void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float dt)
+float SphereField::holdSpectrum (const StereoSpectrum::Result& spectrum, float dt, HeldSpectrum& held) const
 {
     const float attack = 1.0f - std::exp (-dt / spectrumAttack);
     const float release = 1.0f - std::exp (-dt / spectrumRelease);
     float peak = 0;
+    auto& heldLL = held.heldLL;
+    auto& heldRR = held.heldRR;
+    auto& heldLR = held.heldLR;
 
     for (size_t b = 0; b < (size_t) numSpectrumBands; ++b)
     {
@@ -305,9 +318,17 @@ void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float 
         }
     };
 
-    blur (heldLL, smoothLL);
-    blur (heldRR, smoothRR);
-    blur (heldLR, smoothLR);
+    blur (heldLL, held.smoothLL);
+    blur (heldRR, held.smoothRR);
+    blur (heldLR, held.smoothLR);
+    return peak;
+}
+
+void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float dt)
+{
+    const float peak = holdSpectrum (spectrum, dt, output);
+    const auto& smoothLL = output.smoothLL;
+    const auto& smoothRR = output.smoothRR;
 
     const float target = powerToLevel (peak) > 0.02f ? 1.0f : 0.0f;
     audioMix += (target - audioMix) * (1.0f - std::pow (0.94f, dt * 60.0f));
@@ -327,17 +348,19 @@ void SphereField::updateSpectrum (const StereoSpectrum::Result& spectrum, float 
     }
 }
 
-void SphereField::updateLevelTable()
+void SphereField::updateLevelTable (HeldSpectrum& held) const
 {
     for (size_t b = 0; b < (size_t) numSpectrumBands; ++b)
         for (size_t c = 0; c < (size_t) lonCells; ++c)
-            levelTable[b * lonCells + c] = powerToLevel (std::max (0.0f, cellLL[c] * smoothLL[b] + cellRR[c] * smoothRR[b] + cellLR[c] * smoothLR[b]));
+            held.levels[b * lonCells + c] = powerToLevel (std::max (0.0f, cellLL[c] * held.smoothLL[b] + cellRR[c] * held.smoothRR[b]
+                                                                          + cellLR[c] * held.smoothLR[b]));
 }
 
 // Particle's level in a band, interpolated around in longitude. Longitude -pi
 // and +pi are both the back (Side), so the grid wraps.
-float SphereField::levelInBand (int particle, int band) const
+float SphereField::levelInBand (const HeldSpectrum& held, int particle, int band) const
 {
+    const auto& levelTable = held.levels;
     const auto row = (size_t) std::clamp (band, 0, numSpectrumBands - 1) * lonCells;
     const float x = lonPos[(size_t) particle];
     const int whole = (int) x;
@@ -346,19 +369,19 @@ float SphereField::levelInBand (int particle, int band) const
     return levelTable[row + c0] + (levelTable[row + c1] - levelTable[row + c0]) * (x - (float) whole);
 }
 
-float SphereField::audioLevelAt (int particle) const
+float SphereField::audioLevelAt (const HeldSpectrum& held, int particle) const
 {
     const float sp = specPos[(size_t) particle];
     const int b = (int) sp;
     const float t = sp - (float) b;
-    const float p0 = levelInBand (particle, b - 1), p1 = levelInBand (particle, b);
-    const float p2 = levelInBand (particle, b + 1), p3 = levelInBand (particle, b + 2);
+    const float p0 = levelInBand (held, particle, b - 1), p1 = levelInBand (held, particle, b);
+    const float p2 = levelInBand (held, particle, b + 1), p3 = levelInBand (held, particle, b + 2);
     const float v = p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
     return std::clamp (v, 0.0f, 1.0f);
 }
 
 void SphereField::update (const BandSet& bands, const Camera& camera, const StereoSpectrum::Result& spectrum,
-                          double timeSeconds, float dt, SpriteList& out)
+                          const StereoSpectrum::Result* sidechainSpectrum, double timeSeconds, float dt, SpriteList& out)
 {
     // The ring phases only need the time within a long cycle; keeping it small
     // keeps float precision for a session that runs for days.
@@ -367,7 +390,16 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     updateSpectrum (spectrum, dt);
     const bool reactive = audioMix > 0.001f;
     if (reactive)
-        updateLevelTable();
+        updateLevelTable (output);
+
+    // The sidechain's ghost: with none connected it lets go as silence would.
+    static const StereoSpectrum::Result silence {};
+    const float sidechainPeak = holdSpectrum (sidechainSpectrum != nullptr ? *sidechainSpectrum : silence, dt, sidechain);
+    const float sidechainTarget = sidechainSpectrum != nullptr && powerToLevel (sidechainPeak) > 0.02f ? 1.0f : 0.0f;
+    sidechainMix += (sidechainTarget - sidechainMix) * (1.0f - std::pow (0.94f, dt * 60.0f));
+    const bool ghosting = sidechainMix > 0.001f;
+    if (ghosting)
+        updateLevelTable (sidechain);
 
     const int steps = (int) std::ceil (dt / springStep);
     const float stepDt = dt / (float) steps;
@@ -523,7 +555,7 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         if (disp > maxBoostDisplacement || disp < -maxCutDisplacement)
             disp = limitDisplacement (disp);
 
-        const float heardLevel = reactive ? audioLevelAt (i) : 0.0f;
+        const float heardLevel = reactive ? audioLevelAt (output, i) : 0.0f;
         const float loud = std::clamp ((heardLevel - loudFloor) / loudWidth, 0.0f, 1.0f);
 
         // Boost or cut here in dB: the inverse of the shape curve. The analysis
@@ -609,6 +641,25 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
         if (pMid[n] > 0)
             out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);
+
+        // The sidechain's ghost shell, over the surface lattice only: faint on
+        // its own, bright where this track is loud at the same frequency and
+        // stereo position, which is where the two mask each other.
+        if (ghosting && i < surfacePoints)
+        {
+            const float sidechainLoud = std::clamp ((audioLevelAt (sidechain, i) - loudFloor) / loudWidth, 0.0f, 1.0f);
+
+            if (sidechainLoud > 0)
+            {
+                const float clash = std::min (sidechainLoud, loud);
+                const auto gv = project (dx, dy, dz, r + ghostLift + ghostTravel * sidechainLoud);
+                const float gFront = std::clamp ((gv.z + 0.7f) / 1.4f, 0.0f, 1.0f);
+                const float gDepth = gFront * gFront * (3.0f - 2.0f * gFront);
+                out.add (clash > maskShown ? maskStyle : ghostStyle, gv.sx, gv.sy,
+                         sizeBase * pSize[n] * gv.persp * (0.6f + 0.7f * clash) * (0.75f + 0.25f * gDepth),
+                         sidechainMix * twinkle * (ghostAlpha * sidechainLoud + maskAlpha * clash) * (0.1f + 0.9f * gDepth));
+            }
+        }
 
         // The affected audio, as a layer leaving the surface: out where it's
         // boosted, in where it's cut, in pure boost or cut colour. A fainter dot

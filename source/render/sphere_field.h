@@ -7,6 +7,10 @@
     That changed audio also shows as a layer of its own: it lifts off the
     surface where the EQ boosts and sinks into the sphere where it cuts, moving
     with the music.
+    With a sidechain coming in, its spectrum is a faint ghost shell just
+    outside the sphere, laid out the same way (frequency up, stereo around). It
+    glows where it meets loud audio on this track: where the two mask each
+    other, and where a sidechained band has something to duck.
     Each frame it advances the springs and writes every glowing dot to a
     SpriteList. It knows nothing about the graphics API, so another backend can
     draw the same list by replacing SpriteRenderer alone. The band rings are in
@@ -29,8 +33,9 @@ class SphereField
 public:
     SphereField();
 
+    // sidechain: the sidechain input's spectrum, or null when none is connected.
     void update (const BandSet& bands, const Camera& camera, const StereoSpectrum::Result& spectrum,
-                 double timeSeconds, float dt, SpriteList& out);
+                 const StereoSpectrum::Result* sidechain, double timeSeconds, float dt, SpriteList& out);
 
     // How strongly the lows, mids and highs glow behind the sphere: 0..1, slow.
     const std::array<float, 3>& getHazeLevels() const    { return hazeLevels; }
@@ -39,12 +44,22 @@ private:
     static constexpr int numSpectrumBands = StereoSpectrum::numBands;
     static constexpr int lonCells = 64;
 
+    // A spectrum held and smoothed for display, and its level at every
+    // frequency and stereo position (0..1, 60 dB).
+    struct HeldSpectrum
+    {
+        std::array<float, numSpectrumBands> heldLL {}, heldRR {}, heldLR {};
+        std::array<float, numSpectrumBands> smoothLL {}, smoothRR {}, smoothLR {};
+        std::array<float, numSpectrumBands * lonCells> levels {};
+    };
+
     void buildParticles();
     void buildStyles();
     void updateSpectrum (const StereoSpectrum::Result& spectrum, float dt);
-    void updateLevelTable();
-    float levelInBand (int particle, int band) const;
-    float audioLevelAt (int particle) const;
+    float holdSpectrum (const StereoSpectrum::Result& spectrum, float dt, HeldSpectrum& held) const; // returns the peak
+    void updateLevelTable (HeldSpectrum& held) const;
+    float levelInBand (const HeldSpectrum& held, int particle, int band) const;
+    float audioLevelAt (const HeldSpectrum& held, int particle) const;
     void addVortex (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
                     float time, float dt, SpriteList& out);
     void addCutRings (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
@@ -66,14 +81,13 @@ private:
     std::vector<float> layerLift; // the affected-audio layer: + lifting off (boost), - sinking in (cut)
 
     std::vector<SpriteStyle> particleStyles, boostRingStyles, cutRingStyles;
-    SpriteStyle midStyle {};
+    SpriteStyle midStyle {}, ghostStyle {}, maskStyle {};
 
-    std::array<float, numSpectrumBands> heldLL {}, heldRR {}, heldLR {};
-    std::array<float, numSpectrumBands> smoothLL {}, smoothRR {}, smoothLR {};
-    std::array<float, numSpectrumBands * lonCells> levelTable {};
+    HeldSpectrum output, sidechain;
     std::array<float, lonCells> cellLL {}, cellRR {}, cellLR {};
 
     float audioMix = 0;
+    float sidechainMix = 0; // eases in while a sidechain is coming in
     std::array<float, 3> hazeLevels {};
 
     std::array<float, maxBands> vortexAmount;

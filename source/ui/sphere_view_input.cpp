@@ -176,6 +176,13 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                     band->q = std::min (band->q, maxShelfQ);
                 changed = true;
                 break;
+            case Kind::sidechain:
+                if (! band->isCut())
+                {
+                    band->externalSidechain = ! band->externalSidechain;
+                    changed = true;
+                }
+                break;
             case Kind::stereo:    band->stereo = ! band->stereo; changed = true; break;
             case Kind::solo:      state.soloLatched = state.soloLatched == band->id ? -1 : band->id; break;
             case Kind::mute:      band->muted = ! band->muted; changed = true; break;

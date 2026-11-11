@@ -62,7 +62,7 @@ private:
     std::atomic<bool> applyingSphereEdit { false };
     std::atomic<bool> hostChangedBands { false };
 
-    StereoSpectrum spectrum;
+    StereoSpectrum spectrum, sidechainSpectrum;
     std::vector<float> recentLeft  = std::vector<float> ((size_t) StereoSpectrum::fftSize);
     std::vector<float> recentRight = std::vector<float> ((size_t) StereoSpectrum::fftSize);
 

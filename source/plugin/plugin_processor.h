@@ -2,7 +2,11 @@
   ==============================================================================
 
     The 3DQ processor: the band parameters, the EQ, the presets, and the recent
-    output the editor's analyser reads.
+    output (and sidechain input) the editor's analyser reads.
+
+    Buses: stereo in and out, plus an optional sidechain input (mono or
+    stereo, off until the host routes something to it). Bands switched to the
+    sidechain take their dynamics from it.
 
   ==============================================================================
 */
@@ -59,7 +63,13 @@ public:
     // Band parameters: one fixed slot per possible band, so hosts can automate them.
     struct BandParamIDs
     {
-        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo;
+        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain;
+
+        // Every ID, for listening to them all.
+        std::array<juce::String, 12> all() const
+        {
+            return { enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain };
+        }
     };
 
     static BandParamIDs getBandParamIDs (int slot);
@@ -84,14 +94,18 @@ public:
     PresetBank presets;
 
     //==============================================================================
-    // Recent output audio for the GUI's analyser. The audio thread writes into a
-    // ring buffer; the GUI copies the latest samples (a torn read only costs a
+    // Recent audio for the GUI's analyser. The audio thread writes into ring
+    // buffers; the GUI copies the latest samples (a torn read only costs a
     // slightly glitchy frame of visualisation, never audio).
     static constexpr int analysisRingSize = 16384;
 
-    // Copies the most recent numSamples (<= analysisRingSize) of each channel.
-    void copyRecentOutput (float* left, float* right, int numSamples) const;
+    // Copy the most recent numSamples (<= analysisRingSize) of each channel.
+    void copyRecentOutput (float* left, float* right, int numSamples) const      { outputRing.copyRecent (left, right, numSamples); }
+    void copyRecentSidechain (float* left, float* right, int numSamples) const   { sidechainRing.copyRecent (left, right, numSamples); }
     double getAnalysisSampleRate() const { return analysisSampleRate.load(); }
+
+    // Whether the host is feeding the sidechain input right now.
+    bool hasSidechainInput() const   { return sidechainConnected.load (std::memory_order_relaxed); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -109,12 +123,22 @@ private:
         std::atomic<float>* type = nullptr;  // choice index: Peak, Low cut, High cut, Low shelf, High shelf
         std::atomic<float>* slope = nullptr; // choice index into cutSlopes
         std::atomic<float>* stereo = nullptr;
+        std::atomic<float>* sidechain = nullptr;
+    };
+
+    struct AnalysisRing
+    {
+        void push (const float* left, const float* right, int numSamples);
+        void copyRecent (float* left, float* right, int numSamples) const;
+
+        std::array<std::array<float, analysisRingSize>, 2> samples {};
+        std::atomic<int> writePos { 0 };
     };
 
     std::array<BandParamPointers, maxBands> bandParams;
 
-    std::array<std::array<float, analysisRingSize>, 2> analysisRing {};
-    std::atomic<int> analysisWritePos { 0 };
+    AnalysisRing outputRing, sidechainRing;
+    std::atomic<bool> sidechainConnected { false };
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     dsp::SphereEq eq;

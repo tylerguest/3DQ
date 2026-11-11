@@ -49,6 +49,7 @@ struct Band
     FilterType type = FilterType::peak;
     int slope = defaultCutSlope;
     bool stereo = false; // filters L and R alike: a full belt round the sphere
+    bool externalSidechain = false; // dynamics follow the sidechain input
 
     // The gain the band has right now, including dynamic movement.
     bool hasLiveGain = false;

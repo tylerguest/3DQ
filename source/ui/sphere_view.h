@@ -56,6 +56,8 @@ public:
     struct LiveAudio
     {
         StereoSpectrum::Result spectrum;
+        StereoSpectrum::Result sidechain; // valid when hasSidechain
+        bool hasSidechain = false;
         std::array<float, maxBands> gainDb {}, levelDb {};
     };
 

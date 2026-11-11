@@ -54,7 +54,7 @@ ThreeDQEditor::ThreeDQEditor (ThreeDQProcessor& p)
     for (int i = 0; i < maxBands; ++i)
     {
         const auto ids = ThreeDQProcessor::getBandParamIDs (i);
-        for (const auto& id : { ids.enabled, ids.freq, ids.gain, ids.q, ids.pos, ids.mute, ids.range, ids.threshold, ids.type, ids.slope, ids.stereo })
+        for (const auto& id : ids.all())
             audioProcessor.state.addParameterListener (id, this);
     }
 
@@ -73,7 +73,7 @@ ThreeDQEditor::~ThreeDQEditor()
     for (int i = 0; i < maxBands; ++i)
     {
         const auto ids = ThreeDQProcessor::getBandParamIDs (i);
-        for (const auto& id : { ids.enabled, ids.freq, ids.gain, ids.q, ids.pos, ids.mute, ids.range, ids.threshold, ids.type, ids.slope, ids.stereo })
+        for (const auto& id : ids.all())
             audioProcessor.state.removeParameterListener (id, this);
     }
 }
@@ -266,6 +266,7 @@ void ThreeDQEditor::applyBandsFromSphere (const BandSet& bands)
             set (ids.type, (float) (int) b->type);
             set (ids.slope, (float) slopeIndexFromDb (b->slope));
             set (ids.stereo, b->stereo ? 1.0f : 0.0f);
+            set (ids.sidechain, b->externalSidechain ? 1.0f : 0.0f);
             set (ids.enabled, 1.0f);
         }
         else
@@ -274,6 +275,7 @@ void ThreeDQEditor::applyBandsFromSphere (const BandSet& bands)
             set (ids.mute, 0.0f);
             set (ids.range, 0.0f);
             set (ids.type, 0.0f);
+            set (ids.sidechain, 0.0f);
         }
     }
 }
@@ -300,6 +302,7 @@ BandSet ThreeDQEditor::getBandsFromProcessor() const
         b.type = p.type;
         b.slope = p.slopeDbPerOct;
         b.stereo = p.stereo;
+        b.externalSidechain = p.externalSidechain;
         result.add (b);
     }
 
@@ -310,6 +313,13 @@ void ThreeDQEditor::readLiveAudio (SphereView::LiveAudio& live)
 {
     audioProcessor.copyRecentOutput (recentLeft.data(), recentRight.data(), StereoSpectrum::fftSize);
     live.spectrum = spectrum.analyse (recentLeft.data(), recentRight.data(), audioProcessor.getAnalysisSampleRate());
+
+    live.hasSidechain = audioProcessor.hasSidechainInput();
+    if (live.hasSidechain)
+    {
+        audioProcessor.copyRecentSidechain (recentLeft.data(), recentRight.data(), StereoSpectrum::fftSize);
+        live.sidechain = sidechainSpectrum.analyse (recentLeft.data(), recentRight.data(), audioProcessor.getAnalysisSampleRate());
+    }
 
     for (int i = 0; i < maxBands; ++i)
     {

@@ -21,6 +21,11 @@
     ~2:1 slope above threshold, never more than the range). So a negative range
     is a dynamic cut (e.g. de-essing), a positive range a dynamic boost.
 
+    A band can instead listen to the sidechain input (externalSidechain): the
+    same band-pass, on the same axis, of another track's audio, so e.g. a band
+    dips the mix's vocal range only while the vocal plays. With no sidechain
+    signal it hears silence and stays at its static gain.
+
     Cut bands (low cut = high-pass, high cut = low-pass) replace the peaking
     filter with a Butterworth cascade of slope 6..48 dB/oct on the same axis,
     so e.g. a low cut at Side removes lows from the side signal only. Gain,
@@ -101,6 +106,7 @@ public:
         b.enabled       = p.enabled;
         b.rangeDb       = std::clamp ((double) p.rangeDb, (double) -maxGainDb, (double) maxGainDb);
         b.thresholdDb   = std::clamp ((double) p.thresholdDb, (double) minThresholdDb, (double) maxThresholdDb);
+        b.externalSidechain = p.externalSidechain;
 
         const int order = ! isCutType (p.type) ? 0 : std::clamp (p.slopeDbPerOct / 6, 1, 2 * maxSections);
         if (p.type != b.type || order != b.order || p.stereo != b.stereo)
@@ -128,8 +134,11 @@ public:
 
     void clearSolo()    { solo.on = false; }
 
-    // In-place stereo processing.
-    void process (float* left, float* right, int numSamples)
+    // In-place stereo processing. sidechainLeft / Right: the sidechain input for
+    // the same samples, or null when there is none (a mono sidechain passes its
+    // one channel as both).
+    void process (float* left, float* right, int numSamples,
+                  const float* sidechainLeft = nullptr, const float* sidechainRight = nullptr)
     {
         for (int start = 0; start < numSamples; start += subBlockSize)
         {
@@ -164,14 +173,22 @@ public:
                     // mix ramps the band in / out (cuts; peaks fade their gain instead).
                     const double wetAmount = mixStart + mixStep * (i - start + 1);
 
+                    // What the detector hears: the band's own input, or the sidechain.
+                    double detectL = left[i], detectR = right[i];
+                    if (b.externalSidechain)
+                    {
+                        detectL = sidechainLeft != nullptr ? (double) sidechainLeft[i] : 0.0;
+                        detectR = sidechainRight != nullptr ? (double) sidechainRight[i] : 0.0;
+                    }
+
                     if (b.stereo)
                     {
                         const double inL = left[i], inR = right[i];
 
                         if (dynamic)
                         {
-                            const double scL = runSection (b.sidechain, b.sidechain.z1, b.sidechain.z2, inL);
-                            const double scR = runSection (b.sidechain, b.sidechain.zr1, b.sidechain.zr2, inR);
+                            const double scL = runSection (b.detector, b.detector.z1, b.detector.z2, detectL);
+                            const double scR = runSection (b.detector, b.detector.zr1, b.detector.zr2, detectR);
                             followEnvelope (b, std::max (std::abs (scL), std::abs (scR)));
                         }
 
@@ -191,7 +208,7 @@ public:
                     const double c = uL * left[i] + uR * right[i];
 
                     if (dynamic)
-                        followEnvelope (b, std::abs (runSection (b.sidechain, b.sidechain.z1, b.sidechain.z2, c)));
+                        followEnvelope (b, std::abs (runSection (b.detector, b.detector.z1, b.detector.z2, uL * detectL + uR * detectR)));
 
                     double y = c;
                     for (int k = 0; k < numSections; ++k)
@@ -243,17 +260,18 @@ private:
         FilterType type = FilterType::peak;
         int order = 0; // cuts: Butterworth order (slope / 6)
         bool stereo = false;
+        bool externalSidechain = false;
 
         std::array<Biquad, maxSections> sections {};
         int numSections = 1;
         double mix = 0.0, mixPrevious = 0.0; // 0..1 wet amount (ramped per sample)
 
-        Biquad sidechain;
+        Biquad detector; // band-pass the dynamics listen through
 
         void clearState()
         {
             for (auto& f : sections) f.clear();
-            sidechain.clear();
+            detector.clear();
         }
 
         // Dynamics
@@ -392,7 +410,7 @@ private:
         const double freq = std::min (std::exp (b.logFreq), 0.49 * sampleRate);
         const double q    = std::exp (b.logQ);
 
-        designListenFilter (b.sidechain, b.type, freq, q, sampleRate);
+        designListenFilter (b.detector, b.type, freq, q, sampleRate);
 
         if (isCutType (b.type))
         {

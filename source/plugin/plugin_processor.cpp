@@ -15,7 +15,8 @@ namespace threedq
 ThreeDQProcessor::ThreeDQProcessor()
     : AudioProcessor (BusesProperties()
                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                        .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       state (*this, nullptr, "ThreeDQ", createParameterLayout()) // XML tag names can't start with a digit
 {
     for (int i = 0; i < maxBands; ++i)
@@ -33,6 +34,7 @@ ThreeDQProcessor::ThreeDQProcessor()
         p.type    = state.getRawParameterValue (ids.type);
         p.slope   = state.getRawParameterValue (ids.slope);
         p.stereo  = state.getRawParameterValue (ids.stereo);
+        p.sidechain = state.getRawParameterValue (ids.sidechain);
     }
 }
 
@@ -41,7 +43,8 @@ ThreeDQProcessor::BandParamIDs ThreeDQProcessor::getBandParamIDs (int slot)
 {
     const auto prefix = "band" + juce::String (slot + 1) + "_";
     return { prefix + "on", prefix + "freq", prefix + "gain", prefix + "q", prefix + "pos", prefix + "mute",
-             prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope", prefix + "stereo" };
+             prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope", prefix + "stereo",
+             prefix + "sc" };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createParameterLayout()
@@ -89,6 +92,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
         group->addChild (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { ids.slope, 1 }, name + "Slope",
                                                                        slopeNames, 3)); // 24 dB/oct
         group->addChild (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { ids.stereo, 1 }, name + "Stereo", false));
+        group->addChild (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { ids.sidechain, 1 }, name + "Dyn Sidechain", false));
         layout.add (std::move (group));
     }
 
@@ -101,7 +105,8 @@ BandParams ThreeDQProcessor::getBandParams (int slot) const
     const auto type = (FilterType) std::clamp ((int) std::lround (p.type->load()), 0, 4);
     const auto slopeIndex = std::clamp ((int) std::lround (p.slope->load()), 0, (int) cutSlopes.size() - 1);
     return { p.enabled->load() >= 0.5f, p.freq->load(), p.gain->load(), p.q->load(), p.pos->load(),
-             p.range->load(), p.threshold->load(), type, cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f };
+             p.range->load(), p.threshold->load(), type, cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f,
+             p.sidechain->load() >= 0.5f };
 }
 
 bool ThreeDQProcessor::isBandMuted (int slot) const
@@ -123,9 +128,12 @@ void ThreeDQProcessor::releaseResources()
 
 bool ThreeDQProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    // 3DQ works on the stereo field, so stereo in, stereo out.
+    // 3DQ works on the stereo field, so stereo in, stereo out. The sidechain
+    // can be off, mono or stereo.
+    const auto sidechain = layouts.inputBuses.size() > 1 ? layouts.getChannelSet (true, 1) : juce::AudioChannelSet::disabled();
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
-        && layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet();
+        && layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet()
+        && (sidechain.isDisabled() || sidechain == juce::AudioChannelSet::mono() || sidechain == juce::AudioChannelSet::stereo());
 }
 
 void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -139,6 +147,19 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     if (buffer.getNumChannels() < 2)
         return;
 
+    // The sidechain, if the host has turned it on; a mono one feeds both sides.
+    const float* sidechainLeft = nullptr;
+    const float* sidechainRight = nullptr;
+
+    if (auto* bus = getBus (true, 1); bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() > 0)
+    {
+        const auto sidechain = getBusBuffer (buffer, true, 1);
+        sidechainLeft = sidechain.getReadPointer (0);
+        sidechainRight = sidechain.getReadPointer (sidechain.getNumChannels() > 1 ? 1 : 0);
+    }
+
+    sidechainConnected.store (sidechainLeft != nullptr, std::memory_order_relaxed);
+
     for (int i = 0; i < maxBands; ++i)
     {
         auto p = getBandParams (i);
@@ -151,32 +172,42 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     else
         eq.clearSolo();
 
-    eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples());
+    // Read before the EQ writes the main channels, in case the host shares buffers.
+    if (sidechainLeft != nullptr)
+        sidechainRing.push (sidechainLeft, sidechainRight, buffer.getNumSamples());
+
+    eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
 
     // Feed the GUI's analyser with the processed output.
-    int pos = analysisWritePos.load (std::memory_order_relaxed);
-    for (int ch = 0; ch < 2; ++ch)
+    outputRing.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+}
+
+void ThreeDQProcessor::AnalysisRing::push (const float* left, const float* right, int numSamples)
+{
+    const int pos = writePos.load (std::memory_order_relaxed);
+
+    for (const auto [ch, src] : { std::pair { 0, left }, std::pair { 1, right } })
     {
-        const auto* src = buffer.getReadPointer (ch);
         int p = pos;
-        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        for (int i = 0; i < numSamples; ++i)
         {
-            analysisRing[(size_t) ch][(size_t) p] = src[i];
+            samples[(size_t) ch][(size_t) p] = src[i];
             p = (p + 1) % analysisRingSize;
         }
     }
-    analysisWritePos.store ((pos + buffer.getNumSamples()) % analysisRingSize, std::memory_order_release);
+
+    writePos.store ((pos + numSamples) % analysisRingSize, std::memory_order_release);
 }
 
-void ThreeDQProcessor::copyRecentOutput (float* left, float* right, int numSamples) const
+void ThreeDQProcessor::AnalysisRing::copyRecent (float* left, float* right, int numSamples) const
 {
     jassert (numSamples <= analysisRingSize);
-    const int end = analysisWritePos.load (std::memory_order_acquire);
+    const int end = writePos.load (std::memory_order_acquire);
     int p = (end - numSamples + analysisRingSize) % analysisRingSize;
     for (int i = 0; i < numSamples; ++i)
     {
-        left[i]  = analysisRing[0][(size_t) p];
-        right[i] = analysisRing[1][(size_t) p];
+        left[i]  = samples[0][(size_t) p];
+        right[i] = samples[1][(size_t) p];
         p = (p + 1) % analysisRingSize;
     }
 }

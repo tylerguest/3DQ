@@ -45,6 +45,7 @@ struct BandParams
     FilterType type = FilterType::peak;
     int slopeDbPerOct = 24; // cuts only
     bool  stereo = false; // filter L and R alike instead of one stereo axis
+    bool  externalSidechain = false; // dynamics listen to the sidechain input, not the band's own signal
 };
 
 } // namespace threedq

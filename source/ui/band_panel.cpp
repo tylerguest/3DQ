@@ -145,12 +145,14 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
     l.next = { x + 72.0f, headerY, 18.0f, headerH };
 
     for (int i = 0; i < numFilterTypes; ++i)
-        l.types[(size_t) i] = { x + 100.0f + 24.0f * (float) i, headerY, 24.0f, headerH };
+        l.types[(size_t) i] = { x + 96.0f + 21.0f * (float) i, headerY, 21.0f, headerH };
 
+    // At the narrowest panel these just fit between the types and Stereo.
+    l.sidechain = { x + 203.0f, headerY, 22.0f, headerH };
     l.remove = { right - 22.0f, headerY, 22.0f, headerH };
     l.mute = { right - 46.0f, headerY, 22.0f, headerH };
     l.solo = { right - 70.0f, headerY, 22.0f, headerH };
-    l.stereo = { right - 114.0f, headerY, 44.0f, headerH };
+    l.stereo = { right - 112.0f, headerY, 42.0f, headerH };
 
     const float knobWidth = (panelWidth - 24.0f) / (float) numPanelKnobs;
     for (int i = 0; i < numPanelKnobs; ++i)
@@ -175,6 +177,7 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
     {
         if (previous.contains (p))    return { Kind::previous };
         if (next.contains (p))        return { Kind::next };
+        if (sidechain.contains (p))   return { Kind::sidechain };
         if (stereo.contains (p))      return { Kind::stereo };
         if (solo.contains (p))        return { Kind::solo };
         if (mute.contains (p))        return { Kind::mute };
@@ -281,7 +284,7 @@ bool knobEnabled (const Band& b, int knob)
 bool knobIsStepped (const Band& b, int knob)    { return knob == qKnob && b.isCut(); }
 
 void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, float amount,
-                    const Band* band, bool soloed, PanelTarget hover, int activeKnob)
+                    const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected)
 {
     using Kind = PanelTarget::Kind;
 
@@ -331,8 +334,13 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
 
             chevron (l.previous, -1.0f, hover.kind == Kind::previous);
             chevron (l.next, 1.0f, hover.kind == Kind::next);
-            text (hover.kind == Kind::type ? juce::String (typeName (hover.index)) : "Band " + juce::String (band->id + 1),
-                  l.title, 11.0f, faded (bright));
+            // Hovering a button names it, in the title.
+            juce::String title = "Band " + juce::String (band->id + 1);
+            if (hover.kind == Kind::type)
+                title = typeName (hover.index);
+            else if (hover.kind == Kind::sidechain)
+                title = band->isCut() ? "No dyn" : sidechainConnected ? "SC in" : "No SC in";
+            text (title, l.title, 11.0f, faded (bright));
 
             for (int i = 0; i < numFilterTypes; ++i)
             {
@@ -341,6 +349,20 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 buttonBack (area, active, hovered);
                 g.setColour (faded (active || hovered ? bright : idle));
                 strokeRounded (g, typeGlyph (i, area.getCentre()), 1.4f);
+            }
+
+            // SC: dynamics follow the sidechain. Cuts have no dynamics, so it's
+            // greyed out on them; it stays lit without a sidechain, dimmer, so
+            // the setting is never hidden.
+            {
+                const bool usable = ! band->isCut();
+                const bool on = usable && band->externalSidechain;
+                const bool hovered = usable && hover.kind == Kind::sidechain;
+                buttonBack (l.sidechain, on, hovered);
+                const auto colour = ! usable ? idle.withMultipliedAlpha (0.4f)
+                                  : on ? (sidechainConnected ? bright : bright.withAlpha (0.7f))
+                                  : hovered ? bright : idle;
+                text ("SC", l.sidechain, 11.0f, faded (colour));
             }
 
             buttonBack (l.stereo, band->stereo, hover.kind == Kind::stereo);

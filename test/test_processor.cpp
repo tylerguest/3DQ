@@ -43,6 +43,37 @@ void run (ThreeDQProcessor& p, std::vector<float>& left, std::vector<float>& rig
     }
 }
 
+// The same with the sidechain bus on: its channels follow the main pair in the
+// buffer, as a host passes them. One sidechain channel = a mono sidechain.
+void runWithSidechain (ThreeDQProcessor& p, std::vector<float>& left, std::vector<float>& right,
+                       std::vector<std::vector<float>> sidechain)
+{
+    juce::MidiBuffer midi;
+    for (size_t start = 0; start < left.size(); start += blockSize)
+    {
+        const int n = (int) std::min<size_t> (blockSize, left.size() - start);
+        std::vector<float*> channels { left.data() + start, right.data() + start };
+        for (auto& ch : sidechain)
+            channels.push_back (ch.data() + start);
+        juce::AudioBuffer<float> buffer (channels.data(), (int) channels.size(), n);
+        p.processBlock (buffer, midi);
+    }
+}
+
+// A processor with its sidechain bus switched on, as a host would.
+std::unique_ptr<ThreeDQProcessor> makeSidechainedProcessor (juce::AudioChannelSet sidechain = juce::AudioChannelSet::stereo())
+{
+    auto p = std::make_unique<ThreeDQProcessor>();
+    auto layout = p->getBusesLayout();
+    layout.inputBuses.getReference (1) = sidechain;
+    const bool applied = p->setBusesLayout (layout);
+    jassert (applied);
+    juce::ignoreUnused (applied);
+    p->prepareToPlay (sr, blockSize);
+    return p;
+}
+
+
 std::unique_ptr<ThreeDQProcessor> makeProcessor()
 {
     auto p = std::make_unique<ThreeDQProcessor>();
@@ -56,6 +87,16 @@ void addPeak (ThreeDQProcessor& p, int slot, float freq, float gain)
     set (p, ids.freq, freq);
     set (p, ids.gain, gain);
     set (p, ids.enabled, 1.0f);
+}
+
+// A dynamic cut at 1 kHz whose detector listens to the sidechain.
+void addSidechainedCut (ThreeDQProcessor& p, int slot)
+{
+    const auto ids = ThreeDQProcessor::getBandParamIDs (slot);
+    addPeak (p, slot, 1000.0f, 0.0f);
+    set (p, ids.range, -12.0f);
+    set (p, ids.threshold, -30.0f);
+    set (p, ids.sidechain, 1.0f);
 }
 
 double gainThrough (ThreeDQProcessor& p, double freq)
@@ -79,7 +120,7 @@ public:
             ThreeDQProcessor p;
             juce::StringArray expected;
             for (int band = 1; band <= maxBands; ++band)
-                for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo" })
+                for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo", "sc" })
                     expected.add ("band" + juce::String (band) + "_" + name);
 
             juce::StringArray actual;
@@ -91,7 +132,7 @@ public:
                     allVersion1 = allVersion1 && withId->getVersionHint() == 1;
                 }
 
-            expectEquals (actual.size(), 132);
+            expectEquals (actual.size(), 144);
             expect (actual == expected, "IDs or their order changed");
             expect (allVersion1, "every parameter has version hint 1");
         }
@@ -113,9 +154,10 @@ public:
                 expectEquals (get (p, ids.type), 0.0f);
                 expectEquals (get (p, ids.slope), 3.0f);
                 expectEquals (get (p, ids.stereo), 0.0f);
+                expectEquals (get (p, ids.sidechain), 0.0f);
 
                 const auto bp = p.getBandParams (slot);
-                expect (! bp.enabled && bp.type == FilterType::peak && bp.slopeDbPerOct == 24);
+                expect (! bp.enabled && bp.type == FilterType::peak && bp.slopeDbPerOct == 24 && ! bp.externalSidechain);
             }
         }
 
@@ -149,6 +191,7 @@ public:
             set (p, ids.type, 2.0f);
             set (p, ids.slope, 5.0f);
             set (p, ids.stereo, 1.0f);
+            set (p, ids.sidechain, 1.0f);
             set (p, ids.mute, 1.0f);
 
             const auto bp = p.getBandParams (7);
@@ -163,6 +206,7 @@ public:
             expect (bp.type == FilterType::highCut);
             expectEquals (bp.slopeDbPerOct, 48);
             expect (bp.stereo);
+            expect (bp.externalSidechain);
         }
 
         beginTest ("State round-trips through the host, preset name included");
@@ -206,23 +250,96 @@ public:
             expectWithinAbsoluteError (get (p, ThreeDQProcessor::getBandParamIDs (0).gain), 3.0f, 0.01f);
         }
 
-        beginTest ("Bus layouts: stereo in and out only");
+        beginTest ("Bus layouts: stereo in and out, and a sidechain that's off, mono or stereo");
         {
             ThreeDQProcessor p;
-            auto layout = [] (juce::AudioChannelSet in, juce::AudioChannelSet out)
+            using Set = juce::AudioChannelSet;
+            auto layout = [] (Set in, Set out, Set sidechain = Set::disabled())
             {
                 juce::AudioProcessor::BusesLayout l;
                 l.inputBuses.add (in);
+                l.inputBuses.add (sidechain);
                 l.outputBuses.add (out);
                 return l;
             };
-            using Set = juce::AudioChannelSet;
             expect (p.checkBusesLayoutSupported (layout (Set::stereo(), Set::stereo())));
             expect (! p.checkBusesLayoutSupported (layout (Set::mono(), Set::mono())));
             expect (! p.checkBusesLayoutSupported (layout (Set::mono(), Set::stereo())));
             expect (! p.checkBusesLayoutSupported (layout (Set::create5point1(), Set::create5point1())));
+            expect (p.checkBusesLayoutSupported (layout (Set::stereo(), Set::stereo(), Set::mono())));
+            expect (p.checkBusesLayoutSupported (layout (Set::stereo(), Set::stereo(), Set::stereo())));
+            expect (! p.checkBusesLayoutSupported (layout (Set::stereo(), Set::stereo(), Set::create5point1())));
+            expectEquals (p.getBusCount (true), 2);
+            expect (! p.getBus (true, 1)->isEnabled(), "the sidechain starts off");
             expectEquals (p.getTotalNumInputChannels(), 2);
             expectEquals (p.getTotalNumOutputChannels(), 2);
+        }
+
+        beginTest ("Sidechain: a band switched to it ducks when the sidechain is loud");
+        {
+            auto p = makeSidechainedProcessor();
+            addSidechainedCut (*p, 0);
+            const auto quiet = sine (1000.0, sr, 48000, 0.01f), loud = sine (1000.0, sr, 48000, 0.5f);
+            const std::vector<float> silence (48000, 0.0f);
+
+            auto left = quiet, right = quiet;
+            runWithSidechain (*p, left, right, { silence, silence });
+            expectWithinAbsoluteError (gainDb (quiet, left), 0.0, 0.05, "silent sidechain: static");
+            expect (p->hasSidechainInput());
+
+            left = quiet; right = quiet;
+            runWithSidechain (*p, left, right, { loud, loud });
+            expectLessThan (gainDb (quiet, left), -5.0, "loud sidechain: the quiet track still ducks");
+            expectLessThan (p->getLiveLevelDb (0), 0.0f);
+            expectGreaterThan (p->getLiveLevelDb (0), -30.0f, "the level shown is the sidechain's");
+        }
+
+        beginTest ("Sidechain: a band left on its own signal ignores it");
+        {
+            auto p = makeSidechainedProcessor();
+            addSidechainedCut (*p, 0);
+            set (*p, ThreeDQProcessor::getBandParamIDs (0).sidechain, 0.0f);
+            const auto quiet = sine (1000.0, sr, 48000, 0.01f), loud = sine (1000.0, sr, 48000, 0.5f);
+            auto left = quiet, right = quiet;
+            runWithSidechain (*p, left, right, { loud, loud });
+            expectWithinAbsoluteError (gainDb (quiet, left), 0.0, 0.05);
+        }
+
+        beginTest ("Sidechain: a mono sidechain feeds both sides");
+        {
+            auto p = makeSidechainedProcessor (juce::AudioChannelSet::mono());
+            addSidechainedCut (*p, 0);
+            set (*p, ThreeDQProcessor::getBandParamIDs (0).pos, 90.0f); // hard right: only the right channel's axis
+            const auto quiet = sine (1000.0, sr, 48000, 0.01f), loud = sine (1000.0, sr, 48000, 0.5f);
+            auto left = quiet, right = quiet;
+            runWithSidechain (*p, left, right, { loud });
+            expectLessThan (gainDb (quiet, right), -5.0);
+            expectWithinAbsoluteError (gainDb (quiet, left), 0.0, 0.05, "the band's axis is the right channel");
+        }
+
+        beginTest ("Sidechain: with the bus off a sidechained band stays static");
+        {
+            auto p = makeProcessor();
+            addSidechainedCut (*p, 0);
+            const auto loud = sine (1000.0, sr, 48000, 0.5f);
+            auto left = loud, right = loud;
+            run (*p, left, right);
+            expectWithinAbsoluteError (gainDb (loud, left), 0.0, 0.05, "its own loud signal doesn't move it");
+            expect (! p->hasSidechainInput());
+        }
+
+        beginTest ("Sidechain: the analyser gets the latest sidechain input");
+        {
+            auto p = makeSidechainedProcessor();
+            auto left = noise (20000, 0.5f, 31), right = noise (20000, 0.5f, 32);
+            const auto scL = noise (20000, 0.5f, 33), scR = noise (20000, 0.5f, 34);
+            runWithSidechain (*p, left, right, { scL, scR });
+
+            constexpr int n = 4096;
+            std::vector<float> gotL (n), gotR (n);
+            p->copyRecentSidechain (gotL.data(), gotR.data(), n);
+            expect (std::equal (gotL.begin(), gotL.end(), scL.end() - n));
+            expect (std::equal (gotR.begin(), gotR.end(), scR.end() - n));
         }
 
         beginTest ("With no bands, audio passes through untouched");

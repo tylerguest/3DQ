@@ -32,6 +32,7 @@ bool sameBands (const BandSet& a, const BandSet& b)
         const auto* y = b.find (x.id);
 
         if (y == nullptr || x.muted != y->muted || x.type != y->type || x.slope != y->slope || x.stereo != y->stereo
+            || x.externalSidechain != y->externalSidechain
             || ! near (x.lat, y->lat, 0.002f) || ! near (x.lon, y->lon, 0.003f) || ! near (x.gainDb, y->gainDb, 0.02f)
             || ! near (x.q, y->q, x.q * 0.005f) || ! near (x.range, y->range, 0.02f) || ! near (x.threshold, y->threshold, 0.06f))
             return false;
@@ -59,6 +60,7 @@ std::unique_ptr<juce::XmlElement> toXml (const BandSet& bands)
         e->setAttribute ("type", (int) b.type);
         e->setAttribute ("slope", b.slope);
         e->setAttribute ("stereo", b.stereo);
+        e->setAttribute ("sidechain", b.externalSidechain);
     }
 
     return root;
@@ -87,6 +89,7 @@ std::optional<BandSet> fromXml (const juce::XmlElement* root)
         b.threshold = std::clamp ((float) e->getDoubleAttribute ("threshold", defaultThresholdDb), minThresholdDb, maxThresholdDb);
         b.type = (FilterType) std::clamp (e->getIntAttribute ("type", 0), 0, 4);
         b.stereo = e->getBoolAttribute ("stereo", false);
+        b.externalSidechain = e->getBoolAttribute ("sidechain", false);
         b.q = std::clamp ((float) e->getDoubleAttribute ("q", 1.0), minQ, b.isShelf() ? maxShelfQ : maxQ);
 
         const int slope = e->getIntAttribute ("slope", defaultCutSlope);

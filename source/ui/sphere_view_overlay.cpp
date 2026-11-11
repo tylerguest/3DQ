@@ -242,7 +242,8 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
 
     if (b.range != 0.0f && ! b.isCut())
     {
-        lines.add ("Dyn " + formatGain (b.range) + "  " + dot + "  Thresh " + formatDb (b.threshold) + " dB");
+        lines.add ("Dyn " + formatGain (b.range) + "  " + dot + "  Thresh " + formatDb (b.threshold) + " dB"
+                   + (b.externalSidechain ? "  " + dot + "  SC" : juce::String()));
         lines.add ("Now " + formatGain (b.displayGain()) + "  " + dot + "  Level " + juce::String (std::max (-99.0f, liveLevelDb), 1) + " dB");
     }
 

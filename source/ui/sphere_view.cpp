@@ -425,7 +425,7 @@ void SphereView::renderOpenGL()
     }
 
     sprites.clear();
-    field.update (bands, camera, live.spectrum, frameStart, dt, sprites);
+    field.update (bands, camera, live.spectrum, live.hasSidechain ? &live.sidechain : nullptr, frameStart, dt, sprites);
 
     glViewport (0, 0, width, height);
     glClearColor (17.0f / 255.0f, 17.0f / 255.0f, 16.0f / 255.0f, 1.0f);
@@ -459,7 +459,7 @@ void SphereView::renderOpenGL()
         drawTitle (g, camera, soloed);
         drawMakerMark (g, camera, panelAmount);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount), dpr, panelAmount,
-                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob);
+                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));
         drawPresetBar (g, presetLayout, dpr, *presetInfo, presetHover, presetMenuAmount);
