@@ -33,6 +33,8 @@ bool sameBands (const BandSet& a, const BandSet& b)
 
         if (y == nullptr || x.muted != y->muted || x.type != y->type || x.slope != y->slope || x.stereo != y->stereo
             || x.externalSidechain != y->externalSidechain
+            || ! near (x.attackMs, y->attackMs, x.attackMs * 0.005f) || ! near (x.releaseMs, y->releaseMs, x.releaseMs * 0.005f)
+            || ! near (x.ratio, y->ratio, x.ratio * 0.005f)
             || ! near (x.lat, y->lat, 0.002f) || ! near (x.lon, y->lon, 0.003f) || ! near (x.gainDb, y->gainDb, 0.02f)
             || ! near (x.q, y->q, x.q * 0.005f) || ! near (x.range, y->range, 0.02f) || ! near (x.threshold, y->threshold, 0.06f))
             return false;
@@ -61,6 +63,9 @@ std::unique_ptr<juce::XmlElement> toXml (const BandSet& bands)
         e->setAttribute ("slope", b.slope);
         e->setAttribute ("stereo", b.stereo);
         e->setAttribute ("sidechain", b.externalSidechain);
+        e->setAttribute ("attack", b.attackMs);
+        e->setAttribute ("release", b.releaseMs);
+        e->setAttribute ("ratio", b.ratio);
     }
 
     return root;
@@ -90,6 +95,9 @@ std::optional<BandSet> fromXml (const juce::XmlElement* root)
         b.type = (FilterType) std::clamp (e->getIntAttribute ("type", 0), 0, 4);
         b.stereo = e->getBoolAttribute ("stereo", false);
         b.externalSidechain = e->getBoolAttribute ("sidechain", false);
+        b.attackMs = std::clamp ((float) e->getDoubleAttribute ("attack", defaultAttackMs), minAttackMs, maxAttackMs);
+        b.releaseMs = std::clamp ((float) e->getDoubleAttribute ("release", defaultReleaseMs), minReleaseMs, maxReleaseMs);
+        b.ratio = std::clamp ((float) e->getDoubleAttribute ("ratio", defaultRatio), minRatio, maxRatio);
         b.q = std::clamp ((float) e->getDoubleAttribute ("q", 1.0), minQ, b.isShelf() ? maxShelfQ : maxQ);
 
         const int slope = e->getIntAttribute ("slope", defaultCutSlope);

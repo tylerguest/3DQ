@@ -256,7 +256,7 @@ void SphereView::selectNeighbourLocked (int direction)
 
 PanelTarget SphereView::panelTargetLocked (juce::Point<float> position) const
 {
-    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f);
+    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPage);
     return layout.hit (position, state.panelOpen, state.bands.find (state.selected) != nullptr);
 }
 
@@ -325,6 +325,7 @@ void SphereView::renderOpenGL()
     int hovered, dragged, selected, soloed, activeKnob;
     bool helpHovered, panelOpen;
     float panelAmount;
+    PanelPage panelPage;
     PanelTarget panelHover;
     PresetTarget presetHover;
     std::shared_ptr<const PresetInfo> presetInfo;
@@ -339,6 +340,27 @@ void SphereView::renderOpenGL()
             b.hasLiveGain = b.range != 0.0f && ! b.muted;
             b.liveGainDb = live.gainDb[(size_t) b.id];
             state.liveLevelDb[(size_t) b.id] = live.levelDb[(size_t) b.id];
+
+            // Peak hold for reading the movement: a bigger move is caught at
+            // once and held, then it eases back to what the band is doing now.
+            // The meter glides after it, so it never jumps.
+            const float movement = b.hasLiveGain ? b.liveGainDb - b.gainDb : 0.0f;
+            auto& peak = peakMovement[(size_t) b.id];
+            auto& caught = peakTime[(size_t) b.id];
+
+            if (std::abs (movement) >= std::abs (peak) || movement * peak < 0)
+            {
+                peak = movement;
+                caught = frameStart;
+            }
+            else if (frameStart - caught > peakHoldSeconds)
+            {
+                peak += (movement - peak) * (1.0f - std::exp (-dt / peakFallSeconds));
+            }
+
+            auto& shown = shownMovement[(size_t) b.id];
+            shown += (peak - shown) * (1.0f - std::exp (-dt / meterGlideSeconds));
+            b.peakMovementDb = shown;
         }
 
         // Inertia after a drag, then a slow auto-rotation that keeps going
@@ -409,6 +431,7 @@ void SphereView::renderOpenGL()
         soloed = state.soloHeld >= 0 ? state.soloHeld : state.soloLatched;
         panelOpen = state.panelOpen;
         panelHover = state.panelHover;
+        panelPage = state.panelPage;
         activeKnob = knobDrag.has_value() ? knobDrag->knob : -1;
 
         const float panelGoal = panelOpen ? 1.0f : 0.0f;
@@ -458,7 +481,7 @@ void SphereView::renderOpenGL()
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
         drawMakerMark (g, camera, panelAmount);
-        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount), dpr, panelAmount,
+        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPage), dpr, panelAmount,
                        bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));

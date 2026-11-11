@@ -267,6 +267,9 @@ void ThreeDQEditor::applyBandsFromSphere (const BandSet& bands)
             set (ids.slope, (float) slopeIndexFromDb (b->slope));
             set (ids.stereo, b->stereo ? 1.0f : 0.0f);
             set (ids.sidechain, b->externalSidechain ? 1.0f : 0.0f);
+            set (ids.attack, b->attackMs);
+            set (ids.release, b->releaseMs);
+            set (ids.ratio, b->ratio);
             set (ids.enabled, 1.0f);
         }
         else
@@ -276,6 +279,9 @@ void ThreeDQEditor::applyBandsFromSphere (const BandSet& bands)
             set (ids.range, 0.0f);
             set (ids.type, 0.0f);
             set (ids.sidechain, 0.0f);
+            set (ids.attack, defaultAttackMs);
+            set (ids.release, defaultReleaseMs);
+            set (ids.ratio, defaultRatio);
         }
     }
 }
@@ -303,6 +309,9 @@ BandSet ThreeDQEditor::getBandsFromProcessor() const
         b.slope = p.slopeDbPerOct;
         b.stereo = p.stereo;
         b.externalSidechain = p.externalSidechain;
+        b.attackMs = p.attackMs;
+        b.releaseMs = p.releaseMs;
+        b.ratio = p.ratio;
         result.add (b);
     }
 

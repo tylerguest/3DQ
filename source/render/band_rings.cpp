@@ -2,7 +2,8 @@
   ==============================================================================
 
     SphereField's band rings: the ripples that spread from a peak, the
-    contour rings of cuts and shelves, and the belts of stereo bands.
+    contour rings of cuts and shelves, the belts of stereo bands, and the
+    dotted marker of how far a dynamic band can move.
 
   ==============================================================================
 */
@@ -31,6 +32,58 @@ void SphereField::addRingDot (Vec3 dir, const BandSet& bands, const BandDirectio
     const float facing = 0.2f + 0.8f * std::clamp (s.z + 0.5f, 0.0f, 1.0f);
     const float size = camera.radiusPx() * 0.05f * 1.2f * (cameraDistance / (cameraDistance - s.z));
     out.add (style, s.x, s.y, size, facing * alpha);
+}
+
+// A dynamic band's full reach: a faint dotted ring where the surface would be
+// with the whole range applied, above the bump for a dynamic boost and below
+// it for a dynamic cut, so you can see how far the band can go as it moves.
+// A peak gets a small ring round its centre; a stereo peak or a shelf, a ring
+// round the sphere at its latitude (a shelf's, a little toward its pole).
+void SphereField::addRangeMarker (const Band& b, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
+                                  float time, SpriteList& out) const
+{
+    if (b.muted || b.isCut() || b.range == 0.0f)
+        return;
+
+    auto full = bands;
+    auto* reach = full.find (b.id);
+    reach->hasLiveGain = true;
+    reach->liveGainDb = std::clamp (b.gainDb + b.range, -maxGainDb, maxGainDb);
+
+    const auto& style = ringStyle (b.range > 0 ? std::max (b.range, 6.0f) : std::min (b.range, -6.0f));
+    constexpr float alpha = 0.5f;
+    const float phase = time * 0.15f;
+
+    if (! b.stereo && ! b.isShelf())
+    {
+        // Round the band's centre, at a third of its bump's width.
+        const auto d = bandDirection (b);
+        const Vec3 east { std::cos (b.lon), 0.0f, -std::sin (b.lon) };
+        const Vec3 north { -std::sin (b.lat) * std::sin (b.lon), std::cos (b.lat), -std::sin (b.lat) * std::cos (b.lon) };
+        const float rho = bandWidth (b) * 0.35f, cr = std::cos (rho), sr = std::sin (rho);
+        constexpr int points = 28;
+
+        for (int j = 0; j < points; ++j)
+        {
+            const float a = ((float) j / (float) points) * twoPi + phase;
+            const float ce = std::cos (a) * sr, cn = std::sin (a) * sr;
+            addRingDot ({ d.x * cr + east.x * ce + north.x * cn, d.y * cr + east.y * ce + north.y * cn, d.z * cr + east.z * ce + north.z * cn },
+                        full, dirs, camera, style, alpha, out);
+        }
+        return;
+    }
+
+    const float lat = b.isShelf() ? b.lat + (b.type == FilterType::lowShelf ? -0.25f : 0.25f) : b.lat;
+    const float sinLat = std::sin (lat), cosLat = std::cos (lat);
+    const int points = std::max (12, (int) std::lround (60.0f * cosLat));
+
+    for (int j = 0; j < points; ++j)
+    {
+        const float lon = ((float) j / (float) points) * twoPi + phase;
+        const float overlap = bandOverlap (b, lon);
+        if (overlap > 0.02f)
+            addRingDot ({ cosLat * std::sin (lon), sinLat, cosLat * std::cos (lon) }, full, dirs, camera, style, alpha * overlap, out);
+    }
 }
 
 // Particles round a circle of constant latitude, only where the band acts.

@@ -686,7 +686,10 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
     const auto dirs = directionsOf (bands);
     for (const auto& b : bands)
+    {
         addVortex (b, bands, dirs, camera, time, dt, out);
+        addRangeMarker (b, bands, dirs, camera, time, out);
+    }
 }
 
 } // namespace threedq

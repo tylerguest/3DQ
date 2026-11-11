@@ -132,6 +132,9 @@ public:
             b.q = 1.7f;
             b.stereo = true;
             b.externalSidechain = true;
+            b.attackMs = 12.5f;
+            b.releaseMs = 750.0f;
+            b.ratio = 4.5f;
             auto cut = bandAt (5, 80.0f, 0.0f);
             cut.type = FilterType::lowCut;
             cut.slope = 36;
@@ -156,10 +159,15 @@ public:
                 expect (x->muted && x->stereo && x->externalSidechain && x->type == FilterType::highShelf);
                 expectWithinAbsoluteError (x->range, -6.0f, 1.0e-4f);
                 expectWithinAbsoluteError (x->threshold, -24.0f, 1.0e-4f);
+                expectWithinAbsoluteError (x->attackMs, 12.5f, 1.0e-4f);
+                expectWithinAbsoluteError (x->releaseMs, 750.0f, 1.0e-3f);
+                expectWithinAbsoluteError (x->ratio, 4.5f, 1.0e-4f);
             }
 
             const auto* y = bank.bands().find (5);
             expect (y != nullptr && y->type == FilterType::lowCut && y->slope == 36 && ! y->externalSidechain);
+            expect (y != nullptr && y->attackMs == defaultAttackMs && y->releaseMs == defaultReleaseMs && y->ratio == defaultRatio,
+                    "an untouched band keeps the default timing");
         }
 
         beginTest ("Names: Default is reserved however it's written; names are made file-safe");

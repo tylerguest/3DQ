@@ -14,7 +14,8 @@ namespace threedq
 
 namespace
 {
-constexpr float panelHeight = 116.0f;
+constexpr float panelHeight = 130.0f;
+constexpr float knobRowHeight = 70.0f;
 constexpr float panelBottomInset = 10.0f;
 constexpr float toggleRadius = 10.0f;
 constexpr float toggleClosedInset = 24.0f; // from the window's bottom edge to the button's centre
@@ -24,7 +25,29 @@ constexpr float knobRadius = 14.0f;
 constexpr float knobStartAngle = -2.35619f; // 12 o'clock is 0, clockwise
 constexpr float knobSweep = 4.71239f;
 
-enum Knob { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob };
+constexpr std::array<std::array<PanelKnob, numPanelKnobs>, numPanelPages> pageKnobs {{
+    { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob },
+    { rangeKnob, thresholdKnob, ratioKnob, attackKnob, releaseKnob, liveGainMeter },
+}};
+
+const char* pageName (int page)    { return page == (int) PanelPage::eq ? "EQ" : "DYN"; }
+
+// Log-scaled knobs: position 0..1 <-> value.
+float fromLog (float t, float lo, float hi)     { return lo * std::pow (hi / lo, std::clamp (t, 0.0f, 1.0f)); }
+float toLog (float v, float lo, float hi)       { return std::log (v / lo) / std::log (hi / lo); }
+
+juce::String formatMs (float ms)
+{
+    if (ms >= 1000.0f)
+        return juce::String (ms / 1000.0f, 2) + " s";
+    return juce::String (ms, ms < 10.0f ? 1 : 0) + " ms";
+}
+
+juce::String formatRatio (float ratio)    { return juce::String (ratio, ratio < 10.0f ? 1 : 0) + ":1"; }
+
+// How far the band's gain has moved from its static gain, peak-held so it can
+// be read.
+float liveMovement (const Band& b)    { return b.hasLiveGain ? b.peakMovementDb : 0.0f; }
 
 float qCeiling (const Band& b)    { return b.isShelf() ? maxShelfQ : maxQ; }
 
@@ -46,7 +69,11 @@ const char* knobName (const Band& b, int knob)
         case qKnob:      return b.isCut() ? "SLOPE" : "Q";
         case posKnob:    return "POS";
         case rangeKnob:  return "RANGE";
-        default:         return "THRESH";
+        case thresholdKnob: return "THRESH";
+        case ratioKnob:  return "RATIO";
+        case attackKnob: return "ATTACK";
+        case releaseKnob: return "RELEASE";
+        default:         return "GR";
     }
 }
 
@@ -65,6 +92,16 @@ juce::String positionText (float lon)
 
 juce::String knobText (const Band& b, int knob)
 {
+    if (knob == liveGainMeter)
+    {
+        if (b.isCut() || b.range == 0.0f)
+            return "-";
+
+        // Always one decimal, so the number keeps its width as it changes.
+        const float db = std::round (liveMovement (b) * 10.0f) / 10.0f;
+        return (db > 0.0f ? "+" : db < 0.0f ? "-" : "") + juce::String (std::abs (db), 1) + " dB";
+    }
+
     if (! knobEnabled (b, knob))
         return "-";
 
@@ -75,11 +112,14 @@ juce::String knobText (const Band& b, int knob)
         case qKnob:      return b.isCut() ? juce::String (b.slope) + " dB/oct" : formatQ (b.q);
         case posKnob:    return positionText (b.lon);
         case rangeKnob:  return b.range == 0.0f ? juce::String ("Off") : formatGain (b.range);
-        default:         return formatDb (b.threshold) + " dB";
+        case thresholdKnob: return formatDb (b.threshold) + " dB";
+        case ratioKnob:  return formatRatio (b.ratio);
+        case attackKnob: return formatMs (b.attackMs);
+        default:         return formatMs (b.releaseMs);
     }
 }
 
-bool knobIsBipolar (int knob)    { return knob == gainKnob || knob == posKnob || knob == rangeKnob; }
+bool knobIsBipolar (int knob)    { return knob == gainKnob || knob == posKnob || knob == rangeKnob || knob == liveGainMeter; }
 
 juce::Path typeGlyph (int type, juce::Point<float> c)
 {
@@ -126,9 +166,15 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
 }
 }
 
-BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount)
+PanelKnob panelKnobAt (PanelPage page, int slot)
+{
+    return pageKnobs[(size_t) page][(size_t) std::clamp (slot, 0, numPanelKnobs - 1)];
+}
+
+BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount, PanelPage page)
 {
     BandPanelLayout l;
+    l.page = page;
     l.scale = uiScale (windowWidth, windowHeight);
     const float width = windowWidth / l.scale, height = windowHeight / l.scale;
     const float panelWidth = std::min (width - 8.0f, std::clamp (width - 96.0f, 364.0f, 430.0f));
@@ -156,7 +202,11 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
 
     const float knobWidth = (panelWidth - 24.0f) / (float) numPanelKnobs;
     for (int i = 0; i < numPanelKnobs; ++i)
-        l.knobs[(size_t) i] = { x + knobWidth * (float) i, top + 38.0f, knobWidth, panelHeight - 46.0f };
+        l.knobs[(size_t) i] = { x + knobWidth * (float) i, top + 38.0f, knobWidth, knobRowHeight };
+
+    // The page tabs, centred along the bottom.
+    for (int i = 0; i < numPanelPages; ++i)
+        l.pages[(size_t) i] = { left + panelWidth / 2.0f + (i == 0 ? -40.0f : 2.0f), top + panelHeight - 22.0f, 38.0f, 16.0f };
 
     l.toggleCentre = { width / 2.0f, (height - toggleClosedInset) + (openTop - (height - toggleClosedInset)) * openAmount };
     return l;
@@ -189,7 +239,12 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
 
         for (int i = 0; i < numPanelKnobs; ++i)
             if (knobs[(size_t) i].contains (p))
-                return { Kind::knob, i };
+                return panelKnobAt (page, i) == liveGainMeter ? PanelTarget { Kind::background } // a readout
+                                                               : PanelTarget { Kind::knob, panelKnobAt (page, i) };
+
+        for (int i = 0; i < numPanelPages; ++i)
+            if (pages[(size_t) i].contains (p))
+                return { Kind::page, i };
     }
 
     return { Kind::background };
@@ -224,7 +279,13 @@ float knobPosition (const Band& b, int knob)
             return std::log (b.q / minQ) / std::log (qCeiling (b) / minQ);
         case posKnob:    return (b.lon / pi + 1.0f) / 2.0f;
         case rangeKnob:  return (b.range + maxGainDb) / (2.0f * maxGainDb);
-        default:         return (b.threshold - minThresholdDb) / (maxThresholdDb - minThresholdDb);
+        case thresholdKnob: return (b.threshold - minThresholdDb) / (maxThresholdDb - minThresholdDb);
+        case ratioKnob:  return toLog (b.ratio, minRatio, maxRatio);
+        case attackKnob: return toLog (b.attackMs, minAttackMs, maxAttackMs);
+        case releaseKnob: return toLog (b.releaseMs, minReleaseMs, maxReleaseMs);
+        default:
+            // The meter: the live change as a share of the range, round the centre.
+            return b.range == 0.0f ? 0.5f : 0.5f + 0.5f * std::clamp (liveMovement (b) / std::abs (b.range), -1.0f, 1.0f);
     }
 }
 
@@ -248,9 +309,13 @@ void setKnobPosition (Band& b, int knob, float position)
             if (std::abs (b.range) < 0.05f)
                 b.range = 0;
             break;
-        default:
+        case thresholdKnob:
             b.threshold = snapDb (minThresholdDb + t * (maxThresholdDb - minThresholdDb));
             break;
+        case ratioKnob:   b.ratio = std::round (fromLog (t, minRatio, maxRatio) * 10.0f) / 10.0f; break;
+        case attackKnob:  b.attackMs = fromLog (t, minAttackMs, maxAttackMs); break;
+        case releaseKnob: b.releaseMs = fromLog (t, minReleaseMs, maxReleaseMs); break;
+        default:          break; // the meter can't be turned
     }
 }
 
@@ -268,7 +333,11 @@ void resetKnob (Band& b, int knob)
             break;
         case posKnob:    b.lon = 0; break;
         case rangeKnob:  b.range = 0; break;
-        default:         b.threshold = defaultThresholdDb; break;
+        case thresholdKnob: b.threshold = defaultThresholdDb; break;
+        case ratioKnob:  b.ratio = defaultRatio; break;
+        case attackKnob: b.attackMs = defaultAttackMs; break;
+        case releaseKnob: b.releaseMs = defaultReleaseMs; break;
+        default:         break;
     }
 }
 
@@ -276,7 +345,9 @@ bool knobEnabled (const Band& b, int knob)
 {
     if (knob == posKnob)
         return ! b.stereo;
-    if (knob == gainKnob || knob == rangeKnob || knob == thresholdKnob)
+    if (knob == liveGainMeter)
+        return false; // a readout
+    if (knob == gainKnob || knob == rangeKnob || knob == thresholdKnob || knob == ratioKnob || knob == attackKnob || knob == releaseKnob)
         return ! b.isCut();
     return true;
 }
@@ -396,11 +467,13 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 strokeRounded (g, cross, 1.5f);
             }
 
-            for (int i = 0; i < numPanelKnobs; ++i)
+            for (int slot = 0; slot < numPanelKnobs; ++slot)
             {
-                const auto area = l.knobs[(size_t) i];
-                const bool enabled = knobEnabled (*band, i);
-                const bool lit = enabled && (activeKnob == i || (hover.kind == Kind::knob && hover.index == i));
+                const int i = panelKnobAt (l.page, slot);
+                const auto area = l.knobs[(size_t) slot];
+                const bool meter = i == liveGainMeter;
+                const bool enabled = meter ? ! band->isCut() && band->range != 0.0f : knobEnabled (*band, i);
+                const bool lit = ! meter && enabled && (activeKnob == i || (hover.kind == Kind::knob && hover.index == i));
                 const float dim = enabled ? 1.0f : 0.32f;
                 const float cx = area.getCentreX(), cy = area.getY() + 30.0f;
                 const float position = std::clamp (knobPosition (*band, i), 0.0f, 1.0f);
@@ -417,19 +490,39 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
 
                 if (enabled && std::abs (angle - anchor) > 0.01f)
                 {
-                    const float value = i == gainKnob ? band->gainDb : i == rangeKnob ? band->range : 0.0f;
+                    const float value = i == gainKnob ? band->gainDb : i == rangeKnob ? band->range : meter ? liveMovement (*band) : 0.0f;
                     g.setColour (faded (value > 0.0f ? boostColour : value < 0.0f ? cutColour : bright));
                     strokeRounded (g, arc (cx, cy, knobRadius, std::min (anchor, angle), std::max (anchor, angle)), 2.2f);
                 }
 
-                juce::Path pointer;
-                pointer.startNewSubPath (cx + std::sin (angle) * 4.5f, cy - std::cos (angle) * 4.5f);
-                pointer.lineTo (cx + std::sin (angle) * 9.5f, cy - std::cos (angle) * 9.5f);
-                g.setColour (faded (bright.withMultipliedAlpha (dim)));
-                strokeRounded (g, pointer, 1.6f);
+                // A meter has no pointer, as it can't be turned.
+                if (! meter)
+                {
+                    juce::Path pointer;
+                    pointer.startNewSubPath (cx + std::sin (angle) * 4.5f, cy - std::cos (angle) * 4.5f);
+                    pointer.lineTo (cx + std::sin (angle) * 9.5f, cy - std::cos (angle) * 9.5f);
+                    g.setColour (faded (bright.withMultipliedAlpha (dim)));
+                    strokeRounded (g, pointer, 1.6f);
+                }
 
                 text (knobText (*band, i), { area.getX(), area.getY() + 48.0f, area.getWidth(), 14.0f }, 10.5f,
                       faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
+            }
+
+            // Page tabs. DYN gets a dot while the band is dynamic, so it's clear
+            // from the EQ page that there's more to see.
+            for (int i = 0; i < numPanelPages; ++i)
+            {
+                const auto area = l.pages[(size_t) i];
+                const bool active = (int) l.page == i, hovered = hover.kind == Kind::page && hover.index == i;
+                buttonBack (area, active, hovered);
+                text (pageName (i), area, 9.5f, faded (active || hovered ? bright : idle));
+
+                if (i == (int) PanelPage::dynamics && ! active && ! band->isCut() && band->range != 0.0f)
+                {
+                    g.setColour (faded ((band->range > 0 ? boostColour : cutColour).withAlpha (0.9f)));
+                    g.fillEllipse (area.getRight() - 6.0f, area.getCentreY() - 1.5f, 3.0f, 3.0f);
+                }
             }
         }
     }

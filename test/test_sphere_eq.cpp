@@ -278,6 +278,68 @@ public:
             expectWithinAbsoluteError (eq->getCurrentGainDb (0), 6.0f, 0.01f);
         }
 
+        beginTest ("The ratio sets how hard a band moves above its threshold");
+        {
+            // 0.1 amplitude at 1 kHz: about 23 dB over a -40 dB threshold, past the knee.
+            auto movementAt = [&] (float ratio)
+            {
+                auto eq = makeEq();
+                auto p = peak (1000.0f, 0.0f);
+                p.rangeDb = -30.0f;
+                p.thresholdDb = -40.0f;
+                p.ratio = ratio;
+                eq->setBand (0, p);
+                run (*eq, mid (sine (1000.0, sr, n, 0.1f)));
+                return eq->getCurrentGainDb (0);
+            };
+
+            // The detector follows the peak of the band's own axis: Mid is (L + R) / sqrt 2, 3 dB over each channel.
+            const float over = 20.0f * std::log10 (0.1f * std::sqrt (2.0f)) + 40.0f;
+            expectWithinAbsoluteError (movementAt (2.0f), -over * 0.5f, 1.0f, "2:1 takes back half");
+            expectWithinAbsoluteError (movementAt (4.0f), -over * 0.75f, 1.0f, "4:1 takes back three quarters");
+            expectWithinAbsoluteError (movementAt (1.0f), 0.0f, 0.01f, "1:1 does nothing");
+            expectGreaterOrEqual (movementAt (20.0f), -30.01f, "never past the range");
+        }
+
+        beginTest ("A slow attack takes longer to pull a band down");
+        {
+            auto movementAfter = [&] (float attackMs, int samples)
+            {
+                auto eq = makeEq();
+                auto p = peak (1000.0f, 0.0f);
+                p.rangeDb = -12.0f;
+                p.thresholdDb = -30.0f;
+                p.attackMs = attackMs;
+                eq->setBand (0, p);
+                run (*eq, mid (sine (1000.0, sr, samples, 0.5f)));
+                return eq->getCurrentGainDb (0);
+            };
+
+            const int tenMs = (int) (0.01 * sr);
+            expectLessThan (movementAfter (1.0f, tenMs), -5.0f, "1 ms: there in 10 ms");
+            expectGreaterThan (movementAfter (200.0f, tenMs), -2.0f, "200 ms: barely started after 10 ms");
+            expectLessThan (movementAfter (200.0f, n), -5.0f, "200 ms: there in a second");
+        }
+
+        beginTest ("A slow release holds a band down for longer");
+        {
+            auto movementAfterStopping = [&] (float releaseMs)
+            {
+                auto eq = makeEq();
+                auto p = peak (1000.0f, 0.0f);
+                p.rangeDb = -12.0f;
+                p.thresholdDb = -30.0f;
+                p.releaseMs = releaseMs;
+                eq->setBand (0, p);
+                run (*eq, mid (sine (1000.0, sr, n, 0.5f)));
+                run (*eq, mid (std::vector<float> ((size_t) (0.1 * sr), 0.0f))); // 100 ms of silence
+                return eq->getCurrentGainDb (0);
+            };
+
+            expectGreaterThan (movementAfterStopping (10.0f), -0.5f, "10 ms: back in 100 ms");
+            expectLessThan (movementAfterStopping (2000.0f), -5.0f, "2 s: still held down after 100 ms");
+        }
+
         beginTest ("A sidechained band listens to the sidechain, not its own signal");
         {
             auto eq = makeEq();

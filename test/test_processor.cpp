@@ -120,7 +120,7 @@ public:
             ThreeDQProcessor p;
             juce::StringArray expected;
             for (int band = 1; band <= maxBands; ++band)
-                for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo", "sc" })
+                for (auto name : { "on", "freq", "gain", "q", "pos", "mute", "range", "thresh", "type", "slope", "stereo", "sc", "atk", "rel", "ratio" })
                     expected.add ("band" + juce::String (band) + "_" + name);
 
             juce::StringArray actual;
@@ -132,7 +132,7 @@ public:
                     allVersion1 = allVersion1 && withId->getVersionHint() == 1;
                 }
 
-            expectEquals (actual.size(), 144);
+            expectEquals (actual.size(), 180);
             expect (actual == expected, "IDs or their order changed");
             expect (allVersion1, "every parameter has version hint 1");
         }
@@ -155,6 +155,9 @@ public:
                 expectEquals (get (p, ids.slope), 3.0f);
                 expectEquals (get (p, ids.stereo), 0.0f);
                 expectEquals (get (p, ids.sidechain), 0.0f);
+                expectWithinAbsoluteError (get (p, ids.attack), defaultAttackMs, 1.0e-4f);
+                expectWithinAbsoluteError (get (p, ids.release), defaultReleaseMs, 1.0e-3f);
+                expectWithinAbsoluteError (get (p, ids.ratio), defaultRatio, 1.0e-4f);
 
                 const auto bp = p.getBandParams (slot);
                 expect (! bp.enabled && bp.type == FilterType::peak && bp.slopeDbPerOct == 24 && ! bp.externalSidechain);
@@ -174,6 +177,14 @@ public:
             expectWithinAbsoluteError (range (ids.q).end, maxQ, 1.0e-5f);
             expectEquals (range (ids.threshold).start, minThresholdDb);
             expectEquals (range (ids.threshold).end, maxThresholdDb);
+            for (const auto& [id, lo, hi] : { std::tuple { ids.attack, minAttackMs, maxAttackMs },
+                                              std::tuple { ids.release, minReleaseMs, maxReleaseMs },
+                                              std::tuple { ids.ratio, minRatio, maxRatio } })
+            {
+                expectWithinAbsoluteError (range (id).start, lo, lo * 1.0e-4f, id);
+                expectWithinAbsoluteError (range (id).end, hi, hi * 1.0e-4f, id);
+                expectWithinAbsoluteError (range (id).convertFrom0to1 (0.5f), std::sqrt (lo * hi), std::sqrt (lo * hi) * 1.0e-3f, id + " is log-scaled");
+            }
             expectWithinAbsoluteError (range (ids.freq).convertFrom0to1 (0.5f), std::sqrt (minFreq * maxFreq), 0.1f, "frequency is log-scaled");
         }
 
@@ -192,6 +203,9 @@ public:
             set (p, ids.slope, 5.0f);
             set (p, ids.stereo, 1.0f);
             set (p, ids.sidechain, 1.0f);
+            set (p, ids.attack, 15.0f);
+            set (p, ids.release, 400.0f);
+            set (p, ids.ratio, 6.0f);
             set (p, ids.mute, 1.0f);
 
             const auto bp = p.getBandParams (7);
@@ -207,6 +221,9 @@ public:
             expectEquals (bp.slopeDbPerOct, 48);
             expect (bp.stereo);
             expect (bp.externalSidechain);
+            expectWithinAbsoluteError (bp.attackMs, 15.0f, 0.01f);
+            expectWithinAbsoluteError (bp.releaseMs, 400.0f, 0.1f);
+            expectWithinAbsoluteError (bp.ratio, 6.0f, 0.01f);
         }
 
         beginTest ("State round-trips through the host, preset name included");

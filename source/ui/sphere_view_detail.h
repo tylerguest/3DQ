@@ -28,6 +28,9 @@ constexpr float minZoom = 0.25f, maxZoom = 2.5f;
 constexpr float helpButtonRadius = 10.0f;
 constexpr float helpButtonInset = 24.0f;  // from the window's right and bottom edges, to the button's centre
 constexpr float knobPixelsFullRange = 200.0f;
+constexpr double peakHoldSeconds = 1.0;  // the GR meter holds a peak this long,
+constexpr float peakFallSeconds = 0.6f;  // then eases back over about this long;
+constexpr float meterGlideSeconds = 0.04f; // it glides to each new value rather than jumping
 constexpr float knobFineFactor = 0.2f; // while Shift is held
 
 inline double nowSeconds()    { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }

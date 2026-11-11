@@ -63,12 +63,13 @@ public:
     // Band parameters: one fixed slot per possible band, so hosts can automate them.
     struct BandParamIDs
     {
-        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain;
+        juce::String enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain,
+                     attack, release, ratio;
 
         // Every ID, for listening to them all.
-        std::array<juce::String, 12> all() const
+        std::array<juce::String, 15> all() const
         {
-            return { enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain };
+            return { enabled, freq, gain, q, pos, mute, range, threshold, type, slope, stereo, sidechain, attack, release, ratio };
         }
     };
 
@@ -124,6 +125,9 @@ private:
         std::atomic<float>* slope = nullptr; // choice index into cutSlopes
         std::atomic<float>* stereo = nullptr;
         std::atomic<float>* sidechain = nullptr;
+        std::atomic<float>* attack = nullptr;
+        std::atomic<float>* release = nullptr;
+        std::atomic<float>* ratio = nullptr;
     };
 
     struct AnalysisRing

@@ -18,8 +18,9 @@
     Dynamic bands (range != 0): the band listens to its own component c through
     a band-pass at its frequency and Q. When that level goes over the threshold,
     the band's gain moves from its static gain toward static + range (soft knee,
-    ~2:1 slope above threshold, never more than the range). So a negative range
-    is a dynamic cut (e.g. de-essing), a positive range a dynamic boost.
+    then the band's ratio above threshold, never more than the range). So a
+    negative range is a dynamic cut (e.g. de-essing), a positive range a dynamic
+    boost. The detector rises and falls with the band's attack and release.
 
     A band can instead listen to the sidechain input (externalSidechain): the
     same band-pass, on the same axis, of another track's audio, so e.g. a band
@@ -70,11 +71,11 @@ public:
         sampleRate = newSampleRate;
         // One-pole smoothing applied once per sub-block, ~15 ms time constant.
         smoothingCoeff = 1.0 - std::exp (-(double) subBlockSize / (0.015 * sampleRate));
-        // Detector: fast attack, slower release (per sample).
-        attackCoeff  = 1.0 - std::exp (-1.0 / (0.002 * sampleRate));
-        releaseCoeff = 1.0 - std::exp (-1.0 / (0.090 * sampleRate));
         for (auto& b : bands)
+        {
             b.snapToTarget = true;
+            b.attackMs = b.releaseMs = -1.0; // recompute the detector's coefficients for this rate
+        }
         reset();
     }
 
@@ -107,6 +108,18 @@ public:
         b.rangeDb       = std::clamp ((double) p.rangeDb, (double) -maxGainDb, (double) maxGainDb);
         b.thresholdDb   = std::clamp ((double) p.thresholdDb, (double) minThresholdDb, (double) maxThresholdDb);
         b.externalSidechain = p.externalSidechain;
+        b.ratioSlope = 1.0 - 1.0 / std::clamp ((double) p.ratio, (double) minRatio, (double) maxRatio);
+
+        const double attackMs  = std::clamp ((double) p.attackMs, (double) minAttackMs, (double) maxAttackMs);
+        const double releaseMs = std::clamp ((double) p.releaseMs, (double) minReleaseMs, (double) maxReleaseMs);
+        if (attackMs != b.attackMs || releaseMs != b.releaseMs)
+        {
+            // Per-sample one-pole coefficients.
+            b.attackMs = attackMs;
+            b.releaseMs = releaseMs;
+            b.attackCoeff  = 1.0 - std::exp (-1.0 / (attackMs * 0.001 * sampleRate));
+            b.releaseCoeff = 1.0 - std::exp (-1.0 / (releaseMs * 0.001 * sampleRate));
+        }
 
         const int order = ! isCutType (p.type) ? 0 : std::clamp (p.slopeDbPerOct / 6, 1, 2 * maxSections);
         if (p.type != b.type || order != b.order || p.stereo != b.stereo)
@@ -236,11 +249,11 @@ public:
 private:
     static constexpr int subBlockSize = 16;
     static constexpr double kneeDb = 6.0;   // soft knee width around the threshold
-    static constexpr double slope  = 0.5;   // dB of gain change per dB over threshold (~2:1)
 
     // Gain movement (dB) for a detector level: 0 below threshold, then
-    // towards the range with a soft knee, never past it.
-    static double dynamicGainFor (double levelDb, double thresholdDb, double rangeDb)
+    // towards the range with a soft knee, never past it. slope: dB of gain
+    // change per dB over the threshold (1 - 1 / ratio).
+    static double dynamicGainFor (double levelDb, double thresholdDb, double rangeDb, double slope)
     {
         const double over = levelDb - thresholdDb;
         double soft;
@@ -276,6 +289,9 @@ private:
 
         // Dynamics
         double rangeDb = 0.0, thresholdDb = -30.0;
+        double ratioSlope = 0.5; // dB of gain change per dB over threshold, from the ratio (2:1)
+        double attackMs = -1.0, releaseMs = -1.0; // what the coefficients were made for
+        double attackCoeff = 1.0, releaseCoeff = 1.0;
         double envelope = 0.0;  // side-chain peak level (linear)
         double dynamicDb = 0.0; // current dynamic gain movement
     };
@@ -293,7 +309,7 @@ private:
 
     void followEnvelope (Band& b, double level) const
     {
-        b.envelope += (level - b.envelope) * (level > b.envelope ? attackCoeff : releaseCoeff);
+        b.envelope += (level - b.envelope) * (level > b.envelope ? b.attackCoeff : b.releaseCoeff);
     }
 
     // Moves a band's smoothed parameters one sub-block toward their targets and
@@ -343,7 +359,7 @@ private:
         // Dynamic movement from the detector (it has its own attack/release);
         // a disabled band, or one whose range is removed, eases back to static.
         const double dynamicTarget = (b.enabled && b.rangeDb != 0.0)
-                                        ? dynamicGainFor (20.0 * std::log10 (b.envelope + 1.0e-9), b.thresholdDb, b.rangeDb)
+                                        ? dynamicGainFor (20.0 * std::log10 (b.envelope + 1.0e-9), b.thresholdDb, b.rangeDb, b.ratioSlope)
                                         : 0.0;
         if (b.rangeDb == 0.0)
             b.envelope = 0.0;
@@ -430,7 +446,6 @@ private:
 
     double sampleRate = 48000.0;
     double smoothingCoeff = 1.0;
-    double attackCoeff = 1.0, releaseCoeff = 1.0;
     std::array<Band, maxBands> bands;
     Solo solo;
     std::array<std::atomic<float>, maxBands> currentGainDb {};

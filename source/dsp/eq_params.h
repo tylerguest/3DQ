@@ -24,6 +24,12 @@ constexpr float maxShelfQ = 2.0f; // higher resonates far past the shelf's own g
 constexpr float minThresholdDb = -60.0f;
 constexpr float maxThresholdDb = 0.0f;
 
+// Dynamics timing and ratio. The defaults are what every band had before they
+// could be set, so older sessions sound the same.
+constexpr float minAttackMs = 0.1f, maxAttackMs = 200.0f, defaultAttackMs = 2.0f;
+constexpr float minReleaseMs = 5.0f, maxReleaseMs = 3000.0f, defaultReleaseMs = 90.0f;
+constexpr float minRatio = 1.0f, maxRatio = 20.0f, defaultRatio = 2.0f;
+
 // The values are the plugin's choice parameter, so new types go at the end.
 enum class FilterType { peak = 0, lowCut = 1, highCut = 2, lowShelf = 3, highShelf = 4 };
 
@@ -46,6 +52,9 @@ struct BandParams
     int slopeDbPerOct = 24; // cuts only
     bool  stereo = false; // filter L and R alike instead of one stereo axis
     bool  externalSidechain = false; // dynamics listen to the sidechain input, not the band's own signal
+    float attackMs = defaultAttackMs;   // how fast the detector rises
+    float releaseMs = defaultReleaseMs; // how fast it falls back
+    float ratio = defaultRatio;         // above threshold: dB in per dB of gain change, as on a compressor
 };
 
 } // namespace threedq

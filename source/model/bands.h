@@ -50,10 +50,12 @@ struct Band
     int slope = defaultCutSlope;
     bool stereo = false; // filters L and R alike: a full belt round the sphere
     bool externalSidechain = false; // dynamics follow the sidechain input
+    float attackMs = defaultAttackMs, releaseMs = defaultReleaseMs, ratio = defaultRatio;
 
     // The gain the band has right now, including dynamic movement.
     bool hasLiveGain = false;
     float liveGainDb = 0;
+    float peakMovementDb = 0; // the largest recent move from the static gain, held for reading
 
     bool isCut() const           { return isCutType (type); }
     bool isShelf() const         { return isShelfType (type); }

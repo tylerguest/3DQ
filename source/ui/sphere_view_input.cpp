@@ -184,6 +184,7 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 }
                 break;
             case Kind::stereo:    band->stereo = ! band->stereo; changed = true; break;
+            case Kind::page:      state.panelPage = (PanelPage) target.index; break;
             case Kind::solo:      state.soloLatched = state.soloLatched == band->id ? -1 : band->id; break;
             case Kind::mute:      band->muted = ! band->muted; changed = true; break;
             case Kind::remove:

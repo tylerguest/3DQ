@@ -3,7 +3,9 @@
 
     The band control panel that slides up from the ^ button: filter type,
     sidechain (SC: the band's dynamics follow the sidechain input), stereo /
-    mono, solo, mute, remove, and a knob for each of the band's settings.
+    mono, solo, mute, remove, and a row of knobs for the band's settings. The
+    knobs come in two pages, picked by the EQ and DYN tabs along the bottom:
+    the band's shape, and its dynamics.
 
     Layout, hit-testing and value mapping are here, with drawing. SphereView
     owns the gestures and the shared state.
@@ -21,15 +23,24 @@
 namespace threedq
 {
 
-constexpr int numPanelKnobs = 6;  // frequency, gain, Q or slope, position, range, threshold
+constexpr int numPanelKnobs = 6;  // knob slots on a page
 constexpr int numFilterTypes = 5; // indexed by FilterType
+constexpr int numPanelPages = 2;
+
+enum class PanelPage { eq, dynamics };
+
+// What a knob slot controls. The meter shows the band's live dynamic gain
+// change; it can't be turned.
+enum PanelKnob { freqKnob, gainKnob, qKnob, posKnob, rangeKnob, thresholdKnob, ratioKnob, attackKnob, releaseKnob, liveGainMeter };
+
+PanelKnob panelKnobAt (PanelPage, int slot);
 
 struct PanelTarget
 {
-    enum class Kind { none, toggle, background, previous, next, type, sidechain, stereo, solo, mute, remove, knob };
+    enum class Kind { none, toggle, background, previous, next, type, sidechain, stereo, solo, mute, remove, knob, page };
 
     Kind kind = Kind::none;
-    int index = 0; // which type or knob
+    int index = 0; // which type, PanelKnob or PanelPage
 
     bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index; }
 };
@@ -38,12 +49,14 @@ struct BandPanelLayout
 {
     juce::Rectangle<float> panel, previous, title, next, sidechain, stereo, solo, mute, remove;
     std::array<juce::Rectangle<float>, numFilterTypes> types;
-    std::array<juce::Rectangle<float>, numPanelKnobs> knobs;
+    std::array<juce::Rectangle<float>, numPanelKnobs> knobs; // slots, left to right
+    std::array<juce::Rectangle<float>, numPanelPages> pages;  // the tabs
     juce::Point<float> toggleCentre;
     float scale = 1;
+    PanelPage page = PanelPage::eq;
 
     // Window size in component pixels. openAmount: 0 = closed (only the ^ button shows), 1 = fully up.
-    static BandPanelLayout make (float width, float height, float openAmount);
+    static BandPanelLayout make (float width, float height, float openAmount, PanelPage page);
 
     // position is in component pixels.
     PanelTarget hit (juce::Point<float> position, bool open, bool hasBand) const;

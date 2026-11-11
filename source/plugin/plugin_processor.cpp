@@ -35,6 +35,9 @@ ThreeDQProcessor::ThreeDQProcessor()
         p.slope   = state.getRawParameterValue (ids.slope);
         p.stereo  = state.getRawParameterValue (ids.stereo);
         p.sidechain = state.getRawParameterValue (ids.sidechain);
+        p.attack  = state.getRawParameterValue (ids.attack);
+        p.release = state.getRawParameterValue (ids.release);
+        p.ratio   = state.getRawParameterValue (ids.ratio);
     }
 }
 
@@ -44,7 +47,7 @@ ThreeDQProcessor::BandParamIDs ThreeDQProcessor::getBandParamIDs (int slot)
     const auto prefix = "band" + juce::String (slot + 1) + "_";
     return { prefix + "on", prefix + "freq", prefix + "gain", prefix + "q", prefix + "pos", prefix + "mute",
              prefix + "range", prefix + "thresh", prefix + "type", prefix + "slope", prefix + "stereo",
-             prefix + "sc" };
+             prefix + "sc", prefix + "atk", prefix + "rel", prefix + "ratio" };
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createParameterLayout()
@@ -93,6 +96,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
                                                                        slopeNames, 3)); // 24 dB/oct
         group->addChild (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { ids.stereo, 1 }, name + "Stereo", false));
         group->addChild (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { ids.sidechain, 1 }, name + "Dyn Sidechain", false));
+        group->addChild (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { ids.attack, 1 }, name + "Dyn Attack",
+                                                                      logRange (minAttackMs, maxAttackMs), defaultAttackMs,
+                                                                      juce::AudioParameterFloatAttributes().withLabel ("ms")));
+        group->addChild (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { ids.release, 1 }, name + "Dyn Release",
+                                                                      logRange (minReleaseMs, maxReleaseMs), defaultReleaseMs,
+                                                                      juce::AudioParameterFloatAttributes().withLabel ("ms")));
+        group->addChild (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { ids.ratio, 1 }, name + "Dyn Ratio",
+                                                                      logRange (minRatio, maxRatio), defaultRatio,
+                                                                      juce::AudioParameterFloatAttributes().withLabel (":1")));
         layout.add (std::move (group));
     }
 
@@ -106,7 +118,7 @@ BandParams ThreeDQProcessor::getBandParams (int slot) const
     const auto slopeIndex = std::clamp ((int) std::lround (p.slope->load()), 0, (int) cutSlopes.size() - 1);
     return { p.enabled->load() >= 0.5f, p.freq->load(), p.gain->load(), p.q->load(), p.pos->load(),
              p.range->load(), p.threshold->load(), type, cutSlopes[(size_t) slopeIndex], p.stereo->load() >= 0.5f,
-             p.sidechain->load() >= 0.5f };
+             p.sidechain->load() >= 0.5f, p.attack->load(), p.release->load(), p.ratio->load() };
 }
 
 bool ThreeDQProcessor::isBandMuted (int slot) const

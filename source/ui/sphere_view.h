@@ -136,6 +136,7 @@ private:
         int selected = -1; // the band last clicked: highlighted, and what the panel controls
         int soloLatched = -1, soloHeld = -1; // from the panel's S button, and Alt+hold on a node
         float panelAmount = 0; // eased 0..1, as the panel slides
+        PanelPage panelPage = PanelPage::eq;
         PanelViewFit panelFit;
         int hovered = -1, dragged = -1;
         std::array<float, maxBands> liveLevelDb {};
@@ -182,7 +183,8 @@ private:
     juce::Point<float> toDevice (juce::Point<float> position) const;
 
     void drawOverlay (juce::Graphics&, const BandSet&, const Camera&, int hovered, int dragged, int selected, float dt);
-    void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected);
+    // levelDb: what a dynamic band's detector hears right now.
+    void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected, float levelDb);
     void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
     void drawTitle (juce::Graphics&, const Camera&, int soloed);
     void drawMakerMark (juce::Graphics&, const Camera&, float panelAmount);
@@ -200,6 +202,10 @@ private:
     std::optional<SurfaceExtent> shownExtent; // eased, as the surface's springs ease
     float helpAmount = 0, presetMenuAmount = 0;
     std::array<float, maxBands> nodeEmphasis {};
+    // The GR meter, per band slot: the held peak of the dynamic movement, when
+    // it was caught, and what's shown (eased toward the peak).
+    std::array<float, maxBands> peakMovement {}, shownMovement {};
+    std::array<double, maxBands> peakTime {};
     float dpr = 1;
     double statsStart = 0, statsCpu = 0;
     int statsFrames = 0;

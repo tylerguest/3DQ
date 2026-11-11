@@ -63,7 +63,7 @@ void SphereView::drawOverlay (juce::Graphics& g, const BandSet& bands, const Cam
         const float target = b.id == dragged ? 1.0f : b.id == hovered ? 0.7f : b.id == selected ? 0.85f : 0.0f;
         auto& emphasis = nodeEmphasis[(size_t) b.id];
         emphasis += (target - emphasis) * (1.0f - std::exp (-dt / 0.08f));
-        drawNode (g, b, screenPosition (bands, dirs, b, camera), emphasis, b.id == selected);
+        drawNode (g, b, screenPosition (bands, dirs, b, camera), emphasis, b.id == selected, live.levelDb[(size_t) b.id]);
     }
 
     const int labelled = dragged >= 0 ? dragged : hovered;
@@ -74,7 +74,7 @@ void SphereView::drawOverlay (juce::Graphics& g, const BandSet& bands, const Cam
 
 // A band node, styled like a small hardware control: a ball in the band's
 // colour, with a ring that fills clockwise for boost and anticlockwise for cut.
-void SphereView::drawNode (juce::Graphics& g, const Band& b, Vec3 s, float emphasis, bool selected)
+void SphereView::drawNode (juce::Graphics& g, const Band& b, Vec3 s, float emphasis, bool selected, float levelDb)
 {
     // The selected band stays visible round the back of the sphere.
     const float facing = std::max (selected ? 0.75f : 0.0f, 0.22f + 0.78f * std::clamp ((s.z + 0.3f) / 0.45f, 0.0f, 1.0f));
@@ -148,6 +148,37 @@ void SphereView::drawNode (juce::Graphics& g, const Band& b, Vec3 s, float empha
         tick.lineTo (x + c * (outer + 2.0f * dpr), y + n * (outer + 2.0f * dpr));
         g.setColour (faded (textColour.withAlpha (0.8f)));
         stroke (tick, 1.4f);
+    }
+
+    // Dynamic band: a thin meter inside the ring for what its detector hears,
+    // from 12 o'clock round to full scale at the top again, with a tick at the
+    // threshold. It's faint below the threshold and lights up in the range's
+    // colour above it, when the band is moving.
+    if (range != 0.0f && ! b.muted)
+    {
+        auto angleFor = [] (float db) { return std::clamp ((db - minThresholdDb) / (maxThresholdDb - minThresholdDb), 0.0f, 1.0f) * twoPi; };
+        const float meterR = core + 2.4f * dpr;
+        const float levelAngle = angleFor (levelDb), thresholdAngle = angleFor (b.threshold);
+        const auto over = (range > 0 ? boostColour : cutColour).withAlpha (0.95f);
+
+        if (levelAngle > 0.02f)
+        {
+            g.setColour (faded (textColour.withAlpha (0.3f)));
+            stroke (arc (x, y, meterR, 0.0f, std::min (levelAngle, thresholdAngle)), 1.2f);
+        }
+
+        if (levelAngle > thresholdAngle)
+        {
+            g.setColour (faded (over));
+            stroke (arc (x, y, meterR, thresholdAngle, levelAngle), 1.4f);
+        }
+
+        const float c = std::cos (thresholdAngle - halfPi), n = std::sin (thresholdAngle - halfPi);
+        juce::Path tick;
+        tick.startNewSubPath (x + c * (meterR - 1.5f * dpr), y + n * (meterR - 1.5f * dpr));
+        tick.lineTo (x + c * (meterR + 1.5f * dpr), y + n * (meterR + 1.5f * dpr));
+        g.setColour (faded (levelAngle > thresholdAngle ? over : textColour.withAlpha (0.7f)));
+        stroke (tick, 1.2f);
     }
 
     // Stereo band: a dot either side of the ring, for the two channels it acts on.
@@ -244,6 +275,8 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
     {
         lines.add ("Dyn " + formatGain (b.range) + "  " + dot + "  Thresh " + formatDb (b.threshold) + " dB"
                    + (b.externalSidechain ? "  " + dot + "  SC" : juce::String()));
+        lines.add (juce::String (b.ratio, b.ratio < 10.0f ? 1 : 0) + ":1  " + dot + "  Attack " + juce::String (b.attackMs, b.attackMs < 10.0f ? 1 : 0)
+                   + " ms  " + dot + "  Release " + juce::String (b.releaseMs, 0) + " ms");
         lines.add ("Now " + formatGain (b.displayGain()) + "  " + dot + "  Level " + juce::String (std::max (-99.0f, liveLevelDb), 1) + " dB");
     }
 
