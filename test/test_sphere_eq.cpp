@@ -293,8 +293,8 @@ public:
                 return eq->getCurrentGainDb (0);
             };
 
-            // The detector follows the peak of the band's own axis: Mid is (L + R) / sqrt 2, 3 dB over each channel.
-            const float over = 20.0f * std::log10 (0.1f * std::sqrt (2.0f)) + 40.0f;
+            // The detector reads the level per channel: 0.1 on both is -20 dB.
+            const float over = 20.0f * std::log10 (0.1f) + 40.0f;
             expectWithinAbsoluteError (movementAt (2.0f), -over * 0.5f, 1.0f, "2:1 takes back half");
             expectWithinAbsoluteError (movementAt (4.0f), -over * 0.75f, 1.0f, "4:1 takes back three quarters");
             expectWithinAbsoluteError (movementAt (1.0f), 0.0f, 0.01f, "1:1 does nothing");
@@ -379,6 +379,41 @@ public:
             eq->setBand (0, p);
             runWithSidechain (*eq, quiet, side (sine (1000.0, sr, n, 0.5f)));
             expectLessThan (eq->getCurrentGainDb (0), -5.0f, "a stereo band hears either channel");
+        }
+
+        beginTest ("A detector reads the same level for a sound on its own axis, at any position");
+        {
+            // A sound sitting exactly on the band's axis, louder channel at 0.25,
+            // reads the same as a stereo band hearing it: about -12 dB.
+            for (float pos : { 0.0f, 180.0f, 90.0f, -90.0f, 45.0f, -120.0f })
+            {
+                auto eq = makeEq();
+                auto p = peak (1000.0f, 0.0f, pos);
+                p.rangeDb = -12.0f;
+                p.thresholdDb = -60.0f;
+                eq->setBand (0, p);
+
+                const double phi = dsp::stereoAxisAngle (pos);
+                const double uL = std::cos (phi), uR = std::sin (phi), louder = std::max (std::abs (uL), std::abs (uR));
+                const auto tone = sine (1000.0, sr, n, 1.0f);
+                Stereo in { tone, tone };
+                for (size_t i = 0; i < tone.size(); ++i)
+                {
+                    in.left[i]  = (float) (tone[i] * 0.25 * uL / louder);
+                    in.right[i] = (float) (tone[i] * 0.25 * uR / louder);
+                }
+                run (*eq, in);
+                expectWithinAbsoluteError (eq->getCurrentLevelDb (0), 20.0f * std::log10 (0.25f), 0.5f, "position " + juce::String (pos));
+            }
+
+            auto eq = makeEq();
+            auto p = peak (1000.0f, 0.0f);
+            p.rangeDb = -12.0f;
+            p.thresholdDb = -60.0f;
+            p.stereo = true;
+            eq->setBand (0, p);
+            run (*eq, mid (sine (1000.0, sr, n, 0.25f)));
+            expectWithinAbsoluteError (eq->getCurrentLevelDb (0), 20.0f * std::log10 (0.25f), 0.5f, "a stereo band agrees");
         }
 
         beginTest ("A mono sidechain reaches a band at any position, Side included");

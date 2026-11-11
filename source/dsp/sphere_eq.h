@@ -176,6 +176,10 @@ public:
 
                 const double uL = std::cos (b.phi);
                 const double uR = std::sin (b.phi);
+                // The detector reads the level per channel, like a stereo band's
+                // max(|L|, |R|): a sound on the band's axis reads its louder
+                // channel's level, at any position (on Mid, not (L+R)/sqrt2's +3 dB).
+                const double perChannel = std::max (std::abs (uL), std::abs (uR));
                 const bool dynamic = ! isCutType (b.type) && b.rangeDb != 0.0;
                 const int numSections = b.numSections;
                 const double mixStart = b.mixPrevious, mixStep = (b.mix - b.mixPrevious) / n;
@@ -221,7 +225,7 @@ public:
 
                     if (dynamic)
                     {
-                        const double heard = b.externalSidechain && monoKey ? detectL : uL * detectL + uR * detectR;
+                        const double heard = b.externalSidechain && monoKey ? detectL : (uL * detectL + uR * detectR) * perChannel;
                         followEnvelope (b, std::abs (runSection (b.detector, b.detector.z1, b.detector.z2, heard)));
                     }
 
