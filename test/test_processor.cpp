@@ -408,6 +408,126 @@ public:
             expectEquals (p->takeInputPeak (0), 0.0f, "taking it resets it");
         }
 
+        beginTest ("Input and output gains run -24..+24 dB, default 0, and clamp past that");
+        for (const auto& id : { ThreeDQProcessor::inputGainID, ThreeDQProcessor::outputGainID })
+        {
+            ThreeDQProcessor p;
+            expectEquals (get (p, id), 0.0f, id);
+            auto* param = p.state.getParameter (id);
+            param->setValueNotifyingHost (1.0f);
+            expectWithinAbsoluteError (get (p, id), maxTrimGainDb, 1.0e-4f, id);
+            param->setValueNotifyingHost (0.0f);
+            expectWithinAbsoluteError (get (p, id), -maxTrimGainDb, 1.0e-4f, id);
+            set (p, id, 40.0f);
+            expectWithinAbsoluteError (get (p, id), maxTrimGainDb, 1.0e-4f, id);
+            expectEquals (param->getLabel(), juce::String ("dB"), id);
+        }
+
+        beginTest ("Input gain before the EQ and output gain after it cancel out");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::inputGainID, 9.0f);
+            set (*p, ThreeDQProcessor::outputGainID, -9.0f);
+            const auto in = sine (1000.0, sr, 48000);
+            auto left = in, right = in;
+            run (*p, left, right);
+            expectWithinAbsoluteError (gainDb (in, left), 0.0, 0.05);
+            expectWithinAbsoluteError (gainDb (in, right), 0.0, 0.05);
+        }
+
+        beginTest ("Input gain changes what a dynamic band hears");
+        {
+            // A dynamic cut at 1 kHz with its threshold at -20 dB: a quiet tone
+            // passes, and turning the input up pushes it over the threshold.
+            auto measure = [&] (float inputDb)
+            {
+                auto p = makeProcessor();
+                const auto ids = ThreeDQProcessor::getBandParamIDs (0);
+                addPeak (*p, 0, 1000.0f, 0.0f);
+                set (*p, ids.range, -12.0f);
+                set (*p, ids.threshold, -20.0f);
+                set (*p, ThreeDQProcessor::inputGainID, inputDb);
+                set (*p, ThreeDQProcessor::outputGainID, -inputDb);
+                const auto in = sine (1000.0, sr, 48000, 0.05f);
+                auto left = in, right = in;
+                run (*p, left, right);
+                return gainDb (in, left);
+            };
+            const double quiet = measure (0.0f), loud = measure (18.0f);
+            expectGreaterThan (quiet, -1.0, "under the threshold it passes");
+            expectLessThan (loud, quiet - 3.0, "pushed over it, the band ducks");
+        }
+
+        beginTest ("The input meter is per channel, and silence reads zero");
+        {
+            auto p = makeProcessor();
+            auto left = sine (1000.0, sr, 4800, 0.5f);
+            auto right = sine (1000.0, sr, 4800, 0.125f);
+            run (*p, left, right);
+            expectWithinAbsoluteError (p->takeInputPeak (0), 0.5f, 0.01f, "left");
+            expectWithinAbsoluteError (p->takeInputPeak (1), 0.125f, 0.01f, "right");
+
+            std::vector<float> silentL (2048, 0.0f), silentR = silentL;
+            run (*p, silentL, silentR);
+            expectEquals (p->takeInputPeak (0), 0.0f);
+            expectEquals (p->takeInputPeak (1), 0.0f);
+        }
+
+        beginTest ("The input meter keeps the loudest sample until it's read");
+        {
+            auto p = makeProcessor();
+            auto loudL = sine (1000.0, sr, 1024, 0.8f), loudR = loudL;
+            run (*p, loudL, loudR);
+            auto quietL = sine (1000.0, sr, 4096, 0.1f), quietR = quietL;
+            run (*p, quietL, quietR);
+            expectWithinAbsoluteError (p->takeInputPeak (0), 0.8f, 0.01f, "a quieter block after doesn't lower it");
+        }
+
+        beginTest ("Preparing again starts the gains where they are, not gliding from 0 dB");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::outputGainID, -6.0f);
+            p->prepareToPlay (sr, blockSize);
+            std::vector<float> ones (512, 1.0f), alsoOnes = ones;
+            run (*p, ones, alsoOnes);
+            const float half = juce::Decibels::decibelsToGain (-6.0f);
+            expectWithinAbsoluteError (ones[0], half, 1.0e-3f, "the first sample");
+            expectWithinAbsoluteError (ones[511], half, 1.0e-3f, "and the last");
+        }
+
+        beginTest ("A session saved before the gains existed loads them at 0 dB");
+        {
+            ThreeDQProcessor a;
+            addPeak (a, 1, 300.0f, 2.0f);
+            auto tree = a.state.copyState();
+            for (const auto& missing : { ThreeDQProcessor::inputGainID, ThreeDQProcessor::outputGainID })
+                tree.removeChild (tree.getChildWithProperty ("id", missing), nullptr);
+
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), old);
+
+            ThreeDQProcessor b;
+            set (b, ThreeDQProcessor::inputGainID, 5.0f);
+            set (b, ThreeDQProcessor::outputGainID, -7.0f);
+            b.setStateInformation (old.getData(), (int) old.getSize());
+            expectEquals (get (b, ThreeDQProcessor::inputGainID), 0.0f, "input");
+            expectEquals (get (b, ThreeDQProcessor::outputGainID), 0.0f, "output");
+            expectWithinAbsoluteError (get (b, ThreeDQProcessor::getBandParamIDs (1).gain), 2.0f, 0.01f);
+        }
+
+        beginTest ("The gains are saved with the session");
+        {
+            ThreeDQProcessor a;
+            set (a, ThreeDQProcessor::inputGainID, 3.5f);
+            set (a, ThreeDQProcessor::outputGainID, -12.0f);
+            juce::MemoryBlock saved;
+            a.getStateInformation (saved);
+            ThreeDQProcessor b;
+            b.setStateInformation (saved.getData(), (int) saved.getSize());
+            expectWithinAbsoluteError (get (b, ThreeDQProcessor::inputGainID), 3.5f, 1.0e-3f);
+            expectWithinAbsoluteError (get (b, ThreeDQProcessor::outputGainID), -12.0f, 1.0e-3f);
+        }
+
         beginTest ("Keeps the host's track name and colour");
         {
             auto p = makeProcessor();

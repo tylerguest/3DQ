@@ -14,6 +14,7 @@
       <FILE id="704d27" name="test_camera.cpp" compile="1" resource="0" file="test_camera.cpp"/>
       <FILE id="f621f0" name="test_preset_bank.cpp" compile="1" resource="0" file="test_preset_bank.cpp"/>
       <FILE id="815c3d" name="test_processor.cpp" compile="1" resource="0" file="test_processor.cpp"/>
+      <FILE id="a3c7e1" name="test_layout.cpp" compile="1" resource="0" file="test_layout.cpp"/>
     </GROUP>
     <GROUP id="tdqSrc" name="source">
       <FILE id="a7f38d" name="preset_bank.cpp" compile="1" resource="0" file="../source/model/preset_bank.cpp"/>
