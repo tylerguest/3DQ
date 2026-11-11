@@ -4,9 +4,12 @@
     SphereField: the sphere's particles. The surface's shape is the EQ alone;
     a dot's size and brightness are the audio at its frequency and stereo
     position, and it turns orange or red where the EQ is changing real signal.
-    That changed audio also shows as a layer of its own: it lifts off the
-    surface where the EQ boosts and sinks into the sphere where it cuts, moving
-    with the music.
+    The audio also stands up as spikes, like the spectrum behind a 2D EQ's
+    curve: each dot's spike is the level at its frequency and stereo position,
+    quick to rise and quicker to read than the glow. They stand on the EQ's
+    surface and measure the output, so a boost grows them and a cut shrinks
+    them; they take the dot's colour, orange or red where the EQ changes real
+    audio.
     With a sidechain coming in, its spectrum is a faint ghost shell just
     outside the sphere, laid out the same way (frequency up, stereo around). It
     glows where it meets loud audio on this track: where the two mask each
@@ -48,6 +51,12 @@ private:
     // frequency and stereo position (0..1, 60 dB).
     struct HeldSpectrum
     {
+        // How it follows the audio: rise and fall times (s), and whether it is
+        // blurred widely across frequency (the glow) or only lightly (the spikes).
+        float attack, release;
+        bool wideBlur;
+        std::array<float, numSpectrumBands> tilt {}; // a gain per band, applied when reading levels
+
         std::array<float, numSpectrumBands> heldLL {}, heldRR {}, heldLR {};
         std::array<float, numSpectrumBands> smoothLL {}, smoothRR {}, smoothLR {};
         std::array<float, numSpectrumBands * lonCells> levels {};
@@ -81,12 +90,11 @@ private:
     std::vector<float> pX, pY, pZ, pShell, pSize, pTwinkle, pTwinkleRate, pMid, pFreq, pCosLon, pSinLon, specPos, lonPos;
     std::vector<int> pColour, drawOrder; // drawOrder: the far half first, so nearer balls cover it
     std::vector<float> springOffset, springVelocity;
-    std::vector<float> layerLift; // the affected-audio layer: + lifting off (boost), - sinking in (cut)
 
     std::vector<SpriteStyle> particleStyles, boostRingStyles, cutRingStyles;
     SpriteStyle midStyle {}, ghostStyle {}, maskStyle {};
 
-    HeldSpectrum output, sidechain;
+    HeldSpectrum output, sidechain, spikes;
     std::array<float, lonCells> cellLL {}, cellRR {}, cellLR {};
 
     float audioMix = 0;

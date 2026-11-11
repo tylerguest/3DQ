@@ -106,7 +106,24 @@ float powerToLevel (float power)
 constexpr float spectrumAttack = 0.035f;
 constexpr float spectrumRelease = 0.24f;
 constexpr float hazeAttack = 0.25f, hazeRelease = 0.9f; // seconds
-constexpr std::array<float, 5> blurTaps { 0.06f, 0.24f, 0.4f, 0.24f, 0.06f };
+
+// The glow is blurred across frequency (a Gaussian, two bands wide) so single
+// harmonics don't show as rings; the spikes only lightly, to keep their detail.
+constexpr int wideBlurRadius = 4;
+constexpr float wideBlurSigma = 2.0f;
+constexpr std::array<float, 3> sharpBlurTaps { 0.25f, 0.5f, 0.25f };
+
+// The spikes: the audio standing up off the surface.
+constexpr float spikeAttack = 0.012f, spikeRelease = 0.15f; // seconds
+// Each band holds a tenth of an octave, so its level already climbs 3 dB an
+// octave on pink noise against a per-bin analyser; this much more makes the
+// 4.5 dB an octave a 2D EQ's analyser uses, so a typical mix stands level.
+constexpr float spikeTiltDbPerOctave = 1.5f;
+constexpr float spikeFloor = 0.3f, spikeWidth = 0.55f;   // in level units: -62 dB starts a spike, -29 dB is full height
+constexpr float spikeTravel = 0.3f;                      // full height, in sphere radii
+constexpr int spikeStalkDots = 10;                       // dots up a full-height spike, under its tip: close enough to join up
+constexpr float spikeShown = 0.03f;                      // shorter than this, no spike
+constexpr float spikeAlpha = 0.9f;
 
 constexpr float springOmega = 2.0f * pi * 4.5f;
 constexpr float springDamping = 0.42f;
@@ -122,13 +139,6 @@ constexpr float quietAlpha = 0.4f, loudAlpha = 1.5f, quietSize = 0.75f, loudSize
 // signal at least this loud coming in.
 constexpr float tintFullDb = 12.0f;
 constexpr float tintFloor = 0.25f, tintWidth = 0.3f;
-
-// The affected-audio layer: how far it leaves the surface at full strength (in
-// sphere radii), how quickly it follows the music (s), and how bright it is.
-constexpr float layerTravelOut = 0.24f, layerTravelIn = 0.36f; // a cut sinks further, to show through the dent
-constexpr float layerAttack = 0.06f, layerRelease = 0.5f;
-constexpr float layerAlpha = 1.1f;
-constexpr float layerShown = 0.015f; // weaker than this, it isn't drawn
 
 // The sidechain's ghost shell: how far outside the surface it floats (sphere
 // radii; louder floats further), how faint it is alone, and how bright where
@@ -147,6 +157,25 @@ float randomFloat()
 SphereField::SphereField()
 {
     vortexAmount.fill (-1.0f);
+
+    for (auto* held : { &output, &sidechain })
+    {
+        held->attack = spectrumAttack;
+        held->release = spectrumRelease;
+        held->wideBlur = true;
+        held->tilt.fill (1.0f);
+    }
+
+    spikes.attack = spikeAttack;
+    spikes.release = spikeRelease;
+    spikes.wideBlur = false;
+    for (int b = 0; b < numSpectrumBands; ++b)
+    {
+        // Octaves from 1 kHz to the band's centre (the bands run 20 Hz to 20 kHz).
+        const float octaves = std::log2 (20.0f * std::pow (1000.0f, ((float) b + 0.5f) / numSpectrumBands) / 1000.0f);
+        spikes.tilt[(size_t) b] = std::pow (10.0f, spikeTiltDbPerOctave * octaves / 10.0f);
+    }
+
     buildParticles();
     buildStyles();
 
@@ -167,7 +196,7 @@ void SphereField::buildParticles()
     const auto n = (size_t) numParticles;
 
     for (auto* v : { &pX, &pY, &pZ, &pShell, &pSize, &pTwinkle, &pTwinkleRate, &pMid, &pFreq, &pCosLon, &pSinLon,
-                     &specPos, &lonPos, &springOffset, &springVelocity, &layerLift })
+                     &specPos, &lonPos, &springOffset, &springVelocity })
         v->assign (n, 0.0f);
 
     pColour.assign (n, 0);
@@ -289,8 +318,8 @@ const SpriteStyle& SphereField::ringStyle (float db) const
 
 float SphereField::holdSpectrum (const StereoSpectrum::Result& spectrum, float dt, HeldSpectrum& held) const
 {
-    const float attack = 1.0f - std::exp (-dt / spectrumAttack);
-    const float release = 1.0f - std::exp (-dt / spectrumRelease);
+    const float attack = 1.0f - std::exp (-dt / held.attack);
+    const float release = 1.0f - std::exp (-dt / held.release);
     float peak = 0;
     auto& heldLL = held.heldLL;
     auto& heldRR = held.heldRR;
@@ -306,16 +335,35 @@ float SphereField::holdSpectrum (const StereoSpectrum::Result& spectrum, float d
         peak = std::max ({ peak, heldLL[b], heldRR[b] });
     }
 
-    // Blur across frequency so single harmonics don't show up as rings on the sphere.
-    auto blur = [] (const auto& src, auto& dst)
+    static const auto wideTaps = []
     {
-        for (int b = 0; b < numSpectrumBands; ++b)
+        std::array<float, 2 * wideBlurRadius + 1> taps {};
+        float total = 0;
+        for (int j = -wideBlurRadius; j <= wideBlurRadius; ++j)
+            total += taps[(size_t) (j + wideBlurRadius)] = std::exp (-0.5f * (float) (j * j) / (wideBlurSigma * wideBlurSigma));
+        for (auto& t : taps)
+            t /= total;
+        return taps;
+    }();
+
+    auto blur = [&held] (const auto& src, auto& dst)
+    {
+        auto apply = [&] (const auto& taps)
         {
-            float sum = 0;
-            for (int j = -2; j <= 2; ++j)
-                sum += blurTaps[(size_t) (j + 2)] * src[(size_t) std::clamp (b + j, 0, numSpectrumBands - 1)];
-            dst[(size_t) b] = sum;
-        }
+            const int radius = (int) taps.size() / 2;
+            for (int b = 0; b < numSpectrumBands; ++b)
+            {
+                float sum = 0;
+                for (int j = -radius; j <= radius; ++j)
+                    sum += taps[(size_t) (j + radius)] * src[(size_t) std::clamp (b + j, 0, numSpectrumBands - 1)];
+                dst[(size_t) b] = sum;
+            }
+        };
+
+        if (held.wideBlur)
+            apply (wideTaps);
+        else
+            apply (sharpBlurTaps);
     };
 
     blur (heldLL, held.smoothLL);
@@ -352,8 +400,8 @@ void SphereField::updateLevelTable (HeldSpectrum& held) const
 {
     for (size_t b = 0; b < (size_t) numSpectrumBands; ++b)
         for (size_t c = 0; c < (size_t) lonCells; ++c)
-            held.levels[b * lonCells + c] = powerToLevel (std::max (0.0f, cellLL[c] * held.smoothLL[b] + cellRR[c] * held.smoothRR[b]
-                                                                          + cellLR[c] * held.smoothLR[b]));
+            held.levels[b * lonCells + c] = powerToLevel (held.tilt[b] * std::max (0.0f, cellLL[c] * held.smoothLL[b] + cellRR[c] * held.smoothRR[b]
+                                                                                       + cellLR[c] * held.smoothLR[b]));
 }
 
 // Particle's level in a band, interpolated around in longitude. Longitude -pi
@@ -388,9 +436,13 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     const float time = (float) std::fmod (timeSeconds, 3600.0);
 
     updateSpectrum (spectrum, dt);
+    holdSpectrum (spectrum, dt, spikes);
     const bool reactive = audioMix > 0.001f;
     if (reactive)
+    {
         updateLevelTable (output);
+        updateLevelTable (spikes);
+    }
 
     // The sidechain's ghost: with none connected it lets go as silence would.
     static const StereoSpectrum::Result silence {};
@@ -480,8 +532,6 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         return Projected { x1, vy, z, persp, cx + x1 * rPx * persp, cy - vy * rPx * persp };
     };
 
-    const float layerAttackK = 1.0f - std::exp (-dt / layerAttack);
-    const float layerReleaseK = 1.0f - std::exp (-dt / layerRelease);
 
     auto towardsViewer = [&] (size_t s) { return pY[s] * sinPitch + (pZ[s] * cosYaw - pX[s] * sinYaw) * cosPitch; };
 
@@ -575,18 +625,6 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         {
             springOffset[n] = disp;
             springVelocity[n] = 0;
-            layerLift[n] = 0;
-        }
-
-        // The layer follows the changed audio: out fast with a hit, back slowly.
-        const float layerTarget = disp > 0 ? tint : -tint;
-        float lift = layerLift[n];
-        if (layerTarget != 0 || lift != 0)
-        {
-            lift += (layerTarget - lift) * (std::abs (layerTarget) > std::abs (lift) ? layerAttackK : layerReleaseK);
-            if (layerTarget == 0 && std::abs (lift) < 1.0e-3f)
-                lift = 0;
-            layerLift[n] = lift;
         }
 
         float offset = springOffset[n], velocity = springVelocity[n];
@@ -642,6 +680,35 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         if (pMid[n] > 0)
             out.add (midStyle, sx, sy, size * 1.1f, facing * pMid[n] * 0.5f);
 
+        // The spike: the audio coming out here, in an unbroken stalk of dots
+        // standing on the EQ's surface. The level is the plugin's output, so a
+        // boost makes the spikes over it taller and a cut makes them shorter,
+        // and they always stand clear of the surface rather than under it.
+        if (reactive && i < surfacePoints)
+        {
+            const float height = audioMix * std::clamp ((audioLevelAt (spikes, i) - spikeFloor) / spikeWidth, 0.0f, 1.0f);
+
+            if (height > spikeShown)
+            {
+                const int dots = 1 + (int) std::ceil (height * spikeStalkDots);
+                const float alphaBase = extraFade * particleAlpha * spikeAlpha * twinkle * facing * lit;
+                // A stalk pointing at the viewer would only pile its dots up on
+                // the surface, so those fade: the spikes read in profile, round
+                // the sphere's edge, like the graph they are.
+                const float toViewer = towardsViewer (n);
+                const float stalk = 1.0f - 0.85f * toViewer * toViewer;
+
+                for (int d = 1; d <= dots; ++d)
+                {
+                    const float along = (float) d / (float) dots;
+                    const bool tip = d == dots;
+                    const auto sv = project (dx, dy, dz, r + height * spikeTravel * along);
+                    out.add (particleStyles[(size_t) style], sv.sx, sv.sy, sizeBase * pSize[n] * sv.persp * (tip ? 0.85f : 0.55f) * (0.75f + 0.25f * depth),
+                             alphaBase * (tip ? 0.9f : stalk * (0.3f + 0.4f * along)));
+                }
+            }
+        }
+
         // The sidechain's ghost shell, over the surface lattice only: faint on
         // its own, bright where this track is loud at the same frequency and
         // stereo position, which is where the two mask each other.
@@ -661,27 +728,6 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
             }
         }
 
-        // The affected audio, as a layer leaving the surface: out where it's
-        // boosted, in where it's cut, in pure boost or cut colour. A fainter dot
-        // halfway gives the layer depth as it separates.
-        if (std::abs (lift) > layerShown)
-        {
-            const float strength = std::abs (lift);
-            const auto& layerStyle = particleStyles[(size_t) (pColour[n] * numTints + (lift > 0 ? tintSteps : 2 * tintSteps))];
-            const float baseAlpha = extraFade * particleAlpha * layerAlpha * twinkle * std::min (1.0f, strength * 1.6f);
-
-            for (const auto [along, alpha, scale] : { std::tuple { 1.0f, 1.0f, 0.95f }, std::tuple { 0.5f, 0.35f, 0.8f } })
-            {
-                const float rl = std::max (0.05f, r + lift * (lift > 0 ? layerTravelOut : layerTravelIn) * along);
-                const auto lv = project (dx, dy, dz, rl);
-                const float lFront = std::clamp ((lv.z + 0.7f) / 1.4f, 0.0f, 1.0f);
-                const float lDepth = lFront * lFront * (3.0f - 2.0f * lFront);
-                // Inside the sphere it's seen through the surface, so dimmer.
-                const float inside = lift < 0 ? 0.7f : 1.0f;
-                out.add (layerStyle, lv.sx, lv.sy, sizeBase * pSize[n] * lv.persp * audioSize * scale * (0.75f + 0.25f * lDepth),
-                         baseAlpha * alpha * inside * (0.1f + 0.9f * lDepth));
-            }
-        }
     }
 
     const auto dirs = directionsOf (bands);

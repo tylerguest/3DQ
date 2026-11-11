@@ -27,7 +27,7 @@ class StereoSpectrum
 public:
     static constexpr int fftOrder = 12;
     static constexpr int fftSize  = 1 << fftOrder;
-    static constexpr int numBands = 48;
+    static constexpr int numBands = 96; // a tenth of an octave each
 
     struct Result
     {
