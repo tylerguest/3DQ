@@ -636,6 +636,13 @@ void SphereView::mouseDoubleClick (const juce::MouseEvent& e)
 
             state.hovered = slot;
             state.selected = slot;
+
+            // Open the panel on the new band, fitting the view (new band included) above it.
+            if (! state.panelOpen)
+            {
+                state.panelOpen = true;
+                updatePanelFitLocked();
+            }
         }
 
         edited = state.bands;
