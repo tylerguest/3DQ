@@ -207,6 +207,39 @@ public:
             expectLessThan (biggestStep, 0.02);
         }
 
+        beginTest ("A Q 40 notch takes out its own frequency and leaves its neighbours");
+        {
+            auto eq = makeEq();
+            eq->setBand (0, peak (1000.0f, -24.0f, 0.0f, maxQ));
+            const auto at = mid (sine (1000.0, sr, n));
+            expectWithinAbsoluteError (gainDb (at.left, run (*eq, at).left), -24.0, 0.3);
+            const auto beside = mid (sine (1200.0, sr, n));
+            expectGreaterThan (gainDb (beside.left, run (*eq, beside).left), -1.0);
+        }
+
+        beginTest ("Sweeping Q between its extremes stays finite and bounded");
+        for (double rate : { 44100.0, 192000.0 })
+        {
+            auto eq = makeEq (rate);
+            const auto in = mid (sine (1000.0, rate, (int) rate, 0.25f));
+            auto out = in;
+            float loudest = 0;
+            bool finite = true;
+            for (int start = 0, block = 0; start < (int) rate; start += 480, ++block)
+            {
+                eq->setBand (0, peak (block % 4 < 2 ? 1000.0f : 40.0f, -24.0f + 48.0f * (float) (block % 2), 0.0f, block % 3 == 0 ? minQ : maxQ));
+                const int count = std::min (480, (int) rate - start);
+                eq->process (out.left.data() + start, out.right.data() + start, count);
+                for (int i = start; i < start + count; ++i)
+                {
+                    finite = finite && std::isfinite (out.left[(size_t) i]);
+                    loudest = std::max (loudest, std::abs (out.left[(size_t) i]));
+                }
+            }
+            expect (finite, "finite at " + juce::String (rate));
+            expectLessThan (loudest, 0.25f * 31.7f * 2.0f, "never far past +30 dB at " + juce::String (rate));
+        }
+
         beginTest ("A dynamic cut pulls a loud band down, within its range");
         {
             auto eq = makeEq();

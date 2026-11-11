@@ -72,7 +72,7 @@ juce::String knobText (const Band& b, int knob)
     {
         case freqKnob:   return formatFreq (latToFreq (b.lat));
         case gainKnob:   return formatGain (b.gainDb);
-        case qKnob:      return b.isCut() ? juce::String (b.slope) + " dB/oct" : juce::String (b.q, 2);
+        case qKnob:      return b.isCut() ? juce::String (b.slope) + " dB/oct" : formatQ (b.q);
         case posKnob:    return positionText (b.lon);
         case rangeKnob:  return b.range == 0.0f ? juce::String ("Off") : formatGain (b.range);
         default:         return formatDb (b.threshold) + " dB";

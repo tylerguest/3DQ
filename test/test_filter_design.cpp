@@ -51,6 +51,18 @@ public:
             expectGreaterThan (responseDb (wide, 2000.0, sr), responseDb (narrow, 2000.0, sr) + 3.0);
         }
 
+        beginTest ("Peak: Q 40 is a narrow notch, Q 0.025 a tilt across the spectrum");
+        {
+            Biquad notch, tilt;
+            designPeak (notch, 1000.0, maxQ, -24.0, sr);
+            designPeak (tilt, 1000.0, minQ, 12.0, sr);
+            expectWithinAbsoluteError (responseDb (notch, 1000.0, sr), -24.0, 0.01);
+            expectGreaterThan (responseDb (notch, 1100.0, sr), -2.0, "a tenth of an octave away it's nearly gone");
+            expectGreaterThan (responseDb (notch, 900.0, sr), -2.0);
+            expectGreaterThan (responseDb (tilt, 100.0, sr), 6.0, "three octaves down it's still most of its gain");
+            expectGreaterThan (responseDb (tilt, 10000.0, sr), 6.0);
+        }
+
         beginTest ("Shelves: full gain on their side, half gain at their frequency");
         for (bool low : { true, false })
             for (double gain : { -18.0, -6.0, 6.0, 18.0 })

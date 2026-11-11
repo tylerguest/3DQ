@@ -190,11 +190,12 @@ void SphereField::addVortex (const Band& b, const BandSet& bands, const BandDire
 
     const float w = bandWidth (b);
     const float spin = gain > 0 ? 0.5f : -0.5f; // boosts and cuts turn opposite ways
+    const float span = std::min (w * 1.5f, 0.85f * pi); // a very wide band's rings stop short of the far side
 
     for (int k = 0; k < vortexRings; ++k)
     {
         const float t = (float) (k + 1) / vortexRings;
-        const float alpha = t * w * 1.5f; // angular radius of this ring
+        const float alpha = t * span; // angular radius of this ring
         const float sa = std::sin (alpha), ca = std::cos (alpha);
         const float phase = time * spin / (0.35f + t) + t * 2.4f; // inner rings turn faster; the offset makes a spiral
         const float ringFade = strength * (1.15f - t * 0.75f);

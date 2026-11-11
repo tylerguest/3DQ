@@ -49,6 +49,12 @@ inline juce::String formatDb (float db)
     return s.endsWithChar ('0') ? s.dropLastCharacters (1) : s;
 }
 
+// Enough decimals to tell Q 0.025 from 0.03, without clutter at 40.
+inline juce::String formatQ (float q)
+{
+    return juce::String (q, q < 0.1f ? 3 : q < 10.0f ? 2 : 1);
+}
+
 inline juce::String formatGain (float db)    { return (db >= 0 ? "+" : "") + formatDb (db) + " dB"; }
 
 inline juce::Font uiFont (float size, bool bold = false)

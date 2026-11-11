@@ -234,7 +234,7 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
     {
         const juce::String shelfName = b.type == FilterType::lowShelf ? "Low shelf  " : b.type == FilterType::highShelf ? "High shelf  " : "";
         lines.add (shelfName + freq + "  " + formatGain (b.gainDb));
-        lines.add ("Q " + juce::String (b.q, 2) + "  " + dot + "  " + (b.stereo ? juce::String ("Stereo") : panLabel (b.lon)));
+        lines.add ("Q " + formatQ (b.q) + "  " + dot + "  " + (b.stereo ? juce::String ("Stereo") : panLabel (b.lon)));
     }
 
     if (! b.stereo)
