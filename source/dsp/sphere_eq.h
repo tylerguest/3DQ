@@ -51,6 +51,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include "eq_params.h"
 #include "filter_design.h"
 
@@ -74,6 +75,7 @@ public:
         for (auto& b : bands)
         {
             b.snapToTarget = true;
+            b.designedFor[0] = std::numeric_limits<double>::quiet_NaN(); // the coefficients are for the old rate
             setTiming (b, b.attackMs, b.releaseMs); // the same times at the new rate
         }
         reset();
@@ -287,6 +289,11 @@ private:
 
         Biquad detector; // band-pass the dynamics listen through
 
+        // What the coefficients were last designed for (frequency, Q, total
+        // gain, type, order), so a band that isn't moving skips the design.
+        // NaN, which never compares equal, means they must be designed again.
+        std::array<double, 5> designedFor { std::numeric_limits<double>::quiet_NaN() };
+
         void clearState()
         {
             for (auto& f : sections) f.clear();
@@ -440,6 +447,12 @@ private:
     {
         const double freq = std::min (std::exp (b.logFreq), 0.49 * sampleRate);
         const double q    = std::exp (b.logQ);
+        const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
+
+        const std::array<double, 5> design { freq, q, isCutType (b.type) ? 0.0 : totalDb, (double) b.type, (double) b.order };
+        if (design == b.designedFor)
+            return;
+        b.designedFor = design;
 
         designListenFilter (b.detector, b.type, freq, q, sampleRate);
 
@@ -448,8 +461,6 @@ private:
             b.numSections = designCut (b.sections, b.type == FilterType::lowCut, b.order, freq, sampleRate); // a low cut is a high-pass
             return;
         }
-
-        const double totalDb = std::clamp (b.gainDb + b.dynamicDb, (double) -maxGainDb, (double) maxGainDb);
 
         if (b.type == FilterType::peak)
             designPeak (b.sections[0], freq, q, totalDb, sampleRate);

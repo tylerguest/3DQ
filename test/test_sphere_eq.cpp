@@ -456,6 +456,20 @@ public:
             expectLessThan (fresh->getCurrentGainDb (0), -0.5f, "the burst does move the band");
         }
 
+        beginTest ("A new sample rate redesigns a band that has settled, without it being set again");
+        {
+            // A cut has no gain to fade back in, so nothing else would make it redesign.
+            auto eq = makeEq (sr);
+            eq->setBand (0, ofType (FilterType::highCut, 1000.0f, 0.0f, 24));
+            run (*eq, mid (sine (500.0, sr, n))); // long enough to settle and stop redesigning
+
+            const double rate = 96000.0;
+            eq->prepare (rate);
+            const auto in = mid (sine (2000.0, rate, 2 * n));
+            const auto out = run (*eq, in);
+            expectLessThan (gainDb (in.left, out.left), -18.0, "an octave above a 1 kHz cut, not where 1 kHz was at the old rate");
+        }
+
         beginTest ("Solo plays what the band works on, from the EQ's input");
         {
             auto eq = makeEq();
