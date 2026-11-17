@@ -7,6 +7,7 @@
 */
 
 #include "sphere_field.h"
+#include <limits>
 
 namespace threedq
 {
@@ -33,6 +34,7 @@ constexpr float extraStartRadiusPx = 200.0f;
 constexpr float extraFadeCount = 2000.0f; // the newest extras fade in as the sphere grows
 constexpr float extraEdgeFade = 0.2f;     // extras fade in over this much of the front half
 constexpr float springUnset = 1.0e9f;     // an extra that wasn't drawn last frame
+constexpr float bellFlat = 2.0e-4f;       // a bell's skirt this low is under a tenth of a pixel: not worked out
 constexpr int numFrequencyColours = 24;
 constexpr int tintSteps = 7;
 constexpr int numTints = 1 + 2 * tintSteps; // none, then towards boost, then towards cut
@@ -155,8 +157,10 @@ float randomFloat()
 }
 
 SphereField::SphereField()
+    : bellTables ((size_t) maxBands * (bellTableSize + 2))
 {
     vortexAmount.fill (-1.0f);
+    bellTableGain.fill (std::numeric_limits<float>::quiet_NaN());
 
     for (auto* held : { &output, &sidechain })
     {
@@ -428,6 +432,55 @@ float SphereField::audioLevelAt (const HeldSpectrum& held, int particle) const
     return std::clamp (v, 0.0f, 1.0f);
 }
 
+const float* SphereField::bellTable (const Band& b, float& reach2)
+{
+    const auto slot = (size_t) b.id;
+    float* row = bellTables.data() + slot * (bellTableSize + 2);
+    const float gain = b.displayGain();
+
+    if (gain != bellTableGain[slot] || b.q != bellTableQ[slot])
+    {
+        bellTableGain[slot] = gain;
+        bellTableQ[slot] = b.q;
+        // A bell only falls away from its centre, so the row stops at the
+        // first flat entry: past it nothing is looked up.
+        int last = -1;
+
+        for (int j = 0; j <= bellTableSize; ++j)
+        {
+            const float chord = 2.0f * (float) j / (float) bellTableSize;
+            const float angle = 2.0f * std::asin (std::min (1.0f, chord / 2.0f));
+            row[j] = gainDisplacement (peakDbAtAngle (gain, b.q, angle));
+            if (std::abs (row[j]) <= bellFlat)
+                break;
+            last = j;
+        }
+
+        row[bellTableSize + 1] = row[bellTableSize];
+        const float reach = 2.0f * (float) (last + 1) / (float) bellTableSize;
+        bellReach2[slot] = last == bellTableSize ? 5.0f : reach * reach;
+    }
+
+    reach2 = bellReach2[slot];
+    return row;
+}
+
+float SphereField::bellAt (const Band& b, float dot) const
+{
+    const auto slot = (size_t) b.id;
+    if (b.displayGain() != bellTableGain[slot] || b.q != bellTableQ[slot])
+        return bellDisplacement (bellCurve (b), dot);
+
+    const float c2 = std::max (0.0f, 2.0f * (1.0f - dot));
+    if (c2 >= bellReach2[slot])
+        return 0.0f;
+
+    const float* row = bellTables.data() + slot * (bellTableSize + 2);
+    const float pos = std::sqrt (c2) * ((float) bellTableSize / 2.0f);
+    const int j = (int) pos;
+    return row[j] + (row[j + 1] - row[j]) * (pos - (float) j);
+}
+
 void SphereField::update (const BandSet& bands, const Camera& camera, const StereoSpectrum::Result& spectrum,
                           const StereoSpectrum::Result* sidechainSpectrum, double timeSeconds, float dt, SpriteList& out)
 {
@@ -459,9 +512,10 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
     const float cSpring = 2.0f * springDamping * springOmega;
 
     // Bands, prepared once per frame. Muted bands drop out.
-    std::array<float, maxBands> bX, bY, bZ, bAmp, bInvW2, cFc, cTwoN, cCos, cSin;
+    std::array<float, maxBands> bX, bY, bZ, bReach2, cFc, cTwoN, cCos, cSin;
     std::array<float, maxBands> sFc, sA, sK, sCos, sSin, cBias, sBias;
-    std::array<float, maxBands> rSin, rCos, rAmp, rInvW2;
+    std::array<float, maxBands> rSin, rCos, rReach2;
+    std::array<const float*, maxBands> bTable, rTable;
     std::array<bool, maxBands> cLow, sLow;
     int nb = 0, nc = 0, ns = 0, nr = 0;
 
@@ -498,23 +552,28 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         if (b.stereo)
         {
             const auto i = (size_t) nr++;
-            const float w = bandWidth (b);
             rSin[i] = std::sin (b.lat);
             rCos[i] = std::cos (b.lat);
-            rAmp[i] = gainDisplacement (b.displayGain());
-            rInvW2[i] = 1.0f / (w * w);
+            rTable[i] = bellTable (b, rReach2[i]);
             continue;
         }
 
         const auto i = (size_t) nb++;
         const auto d = bandDirection (b);
-        const float w = bandWidth (b);
         bX[i] = d.x;
         bY[i] = d.y;
         bZ[i] = d.z;
-        bAmp[i] = gainDisplacement (b.displayGain());
-        bInvW2[i] = 1.0f / (w * w);
+        bTable[i] = bellTable (b, bReach2[i]);
     }
+
+    // A bell's bump at squared chord distance c2 from its centre.
+    constexpr float tableScale = (float) bellTableSize / 2.0f;
+    auto lookUpBell = [] (const float* table, float c2)
+    {
+        const float pos = std::sqrt (std::max (0.0f, c2)) * tableScale;
+        const int j = (int) pos;
+        return table[j] + (table[j + 1] - table[j]) * (pos - (float) j);
+    };
 
     const float cx = camera.centreX(), cy = camera.centreY(), rPx = camera.radiusPx();
     const float cosYaw = camera.cosYaw, sinYaw = camera.sinYaw, cosPitch = camera.cosPitch, sinPitch = camera.sinPitch;
@@ -557,14 +616,14 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
         const auto n = (size_t) i;
         const float dx = pX[n], dy = pY[n], dz = pZ[n];
 
-        // EQ displacement: Gaussian bumps by squared chord distance.
+        // EQ displacement. Bells: their response, looked up by squared chord distance.
         float disp = 0;
 
         for (size_t k = 0; k < (size_t) nb; ++k)
         {
-            const float e = 2.0f * (1.0f - (dx * bX[k] + dy * bY[k] + dz * bZ[k])) * bInvW2[k];
-            if (e < 12.0f)
-                disp += bAmp[k] * std::exp (-e);
+            const float c2 = 2.0f * (1.0f - (dx * bX[k] + dy * bY[k] + dz * bZ[k]));
+            if (c2 < bReach2[k])
+                disp += lookUpBell (bTable[k], c2);
         }
 
         // Stereo peaks: the same bump, measured in latitude only.
@@ -574,9 +633,9 @@ void SphereField::update (const BandSet& bands, const Camera& camera, const Ster
 
             for (size_t k = 0; k < (size_t) nr; ++k)
             {
-                const float e = 2.0f * (1.0f - (cosLat * rCos[k] + dy * rSin[k])) * rInvW2[k];
-                if (e < 12.0f)
-                    disp += rAmp[k] * std::exp (-e);
+                const float c2 = 2.0f * (1.0f - (cosLat * rCos[k] + dy * rSin[k]));
+                if (c2 < rReach2[k])
+                    disp += lookUpBell (rTable[k], c2);
             }
         }
 

@@ -7,7 +7,7 @@
       latitude  -> frequency (log scale, 20 Hz at the bottom pole, 20 kHz at the top)
       longitude -> stereo position (0 = front = Mid, +90 deg = R, -90 deg = L, back = Side)
       gain      -> bump out of (boost) or dent into (cut) the surface
-      q         -> how wide the bump is
+      q         -> how wide the bump is (a bell's bump is its real response)
 
   ==============================================================================
 */
@@ -139,8 +139,6 @@ inline BandDirections directionsOf (const BandSet& bands)
     return dirs;
 }
 
-// Angular radius of a band's bump: narrower as Q goes up.
-inline float bandWidth (const Band& b)    { return 0.55f / std::sqrt (b.q); }
 
 // How much of the full bump a gain shows (-1..1). A gentle curve rather than
 // linear, so everyday gains stay visible while +-30 dB still fits on the sphere.
@@ -199,13 +197,95 @@ inline float shelfResponseDb (const Band& b, float gainDb, float f)
     return shelfDbAt (b.type == FilterType::lowShelf, a, shelfK (a, b.q), ratio * ratio);
 }
 
+// A bell's magnitude (dB) at x = f / f0: the analogue RBJ peak, the shape the
+// EQ's matched bell follows.
+inline float peakResponseDb (float gainDb, float q, float x)
+{
+    const float a = std::pow (10.0f, gainDb / 40.0f);
+    const float x2 = x * x, u = (1.0f - x2) * (1.0f - x2);
+    return 10.0f * std::log10 ((u + x2 * a * a / (q * q)) / (u + x2 / (a * a * q * q)));
+}
+
+// Past this Q a bell is narrower than the particles are apart, so it would
+// flicker in and out as it moves. Above it the drawn width keeps narrowing,
+// but more slowly: Q 40 draws as Q 8.
+constexpr float sharpestDrawnQ = 4.0f;
+
+inline float drawnQ (float q)
+{
+    return q <= sharpestDrawnQ ? q : sharpestDrawnQ * std::pow (q / sharpestDrawnQ, 0.3f);
+}
+
+// A bell's dB at an angle from its centre on the sphere. The angle reads as a
+// distance in frequency, as latitude does, so along its meridian the bump is
+// the filter's response, and round its centre it is the same in every direction.
+inline float logRatioPerRadian()    { return std::log (maxFreq / minFreq) / pi; }
+
+inline float peakDbAtAngle (float gainDb, float q, float angle)
+{
+    return peakResponseDb (gainDb, drawnQ (q), std::exp (angle * logRatioPerRadian()));
+}
+
+// A bell's drawn shape, worked out once so it is cheap to evaluate in many
+// directions: the same response as peakDbAtAngle, flat past flatDot.
+struct BellCurve
+{
+    float a2 = 1, q2 = 1;
+    float flatDot = 2; // cosine of the angle past which the skirt is under 1e-4 dB
+};
+
+inline BellCurve bellCurve (const Band& b)
+{
+    BellCurve c;
+    c.a2 = std::pow (10.0f, b.displayGain() / 20.0f);
+    const float q = drawnQ (b.q);
+    c.q2 = q * q;
+    // Far out a skirt is about 4.34 (a^2 - 1/a^2) / (q^2 x^2) dB, with x the frequency ratio.
+    const float spread = std::abs (c.a2 - 1.0f / c.a2) / c.q2;
+    if (spread > 0)
+    {
+        const float flatX2 = std::max (1.0f, 4.343f * spread / 1.0e-4f);
+        c.flatDot = std::cos (std::min (pi, 0.5f * std::log (flatX2) / logRatioPerRadian()));
+    }
+    return c;
+}
+
+inline float bellDisplacement (const BellCurve& c, float dot)
+{
+    if (dot < c.flatDot)
+        return 0.0f;
+
+    const float x2 = std::exp (2.0f * std::acos (std::min (dot, 1.0f)) * logRatioPerRadian());
+    const float u = (1.0f - x2) * (1.0f - x2);
+    return gainDisplacement (10.0f * std::log10 ((u + x2 * c.a2 / c.q2) / (u + x2 / (c.a2 * c.q2))));
+}
+
+// The angle at which a bell's bump has fallen to about a third of its height
+// (as a Gaussian of this width would, at its width): for sizing the rings
+// round it. It narrows as Q goes up.
+inline float bandWidth (const Band& b)
+{
+    constexpr float referenceDb = 12.0f;
+    const float edgeDb = referenceDb * std::exp (-1.0f / 0.7f); // the gain shape's curve, undone
+    float lo = 0.0f, hi = pi;
+    for (int i = 0; i < 24; ++i)
+    {
+        const float mid = (lo + hi) / 2.0f;
+        (peakDbAtAngle (referenceDb, b.q, mid) > edgeDb ? lo : hi) = mid;
+    }
+    return std::max (lo, 0.01f);
+}
+
 // How much a band on axis lonBand affects a point at longitude lon: 1 on its
 // own axis, 0 on the opposite one (a Mid cut never touches Side).
 inline float axisOverlap (float lonBand, float lon)    { return (1.0f + std::cos (lon - lonBand)) / 2.0f; }
 
 inline float bandOverlap (const Band& b, float lon)    { return b.stereo ? 1.0f : axisOverlap (b.lon, lon); }
 
-inline float surfaceDisplacement (const BandSet& bands, const BandDirections& dirs, Vec3 d)
+// bell (i, dot): bell i's displacement at cosine dot from its centre, so a
+// renderer can look it up rather than work out the response.
+template <typename BellDisplacement>
+inline float surfaceDisplacement (const BandSet& bands, const BandDirections& dirs, Vec3 d, BellDisplacement&& bell)
 {
     float r = 0;
 
@@ -236,11 +316,15 @@ inline float surfaceDisplacement (const BandSet& bands, const BandDirections& di
         // A stereo peak is a belt: only the distance in latitude counts.
         const float dot = b.stereo ? std::clamp (std::sqrt (std::max (0.0f, 1.0f - d.y * d.y)) * std::cos (b.lat) + d.y * std::sin (b.lat), -1.0f, 1.0f)
                                    : std::clamp (d.x * bd.x + d.y * bd.y + d.z * bd.z, -1.0f, 1.0f);
-        const float w = bandWidth (b);
-        r += gainDisplacement (b.displayGain()) * std::exp (-2.0f * (1.0f - dot) / (w * w));
+        r += bell (i, dot);
     }
 
     return limitDisplacement (r);
+}
+
+inline float surfaceDisplacement (const BandSet& bands, const BandDirections& dirs, Vec3 d)
+{
+    return surfaceDisplacement (bands, dirs, d, [&] (int i, float dot) { return bellDisplacement (bellCurve (bands.items[(size_t) i]), dot); });
 }
 
 // The radius a surface is drawn at: past the knee it eases towards a limit, so

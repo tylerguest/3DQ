@@ -99,6 +99,10 @@ struct SurfaceExtent
 inline SurfaceExtent surfaceExtent (const BandSet& bands, const Camera& camera, int rows = 36, int columns = 72)
 {
     const auto dirs = directionsOf (bands);
+    std::array<BellCurve, maxBands> bells;
+    for (int i = 0; i < bands.count; ++i)
+        bells[(size_t) i] = bellCurve (bands.items[(size_t) i]);
+    const auto bell = [&] (int i, float dot) { return bellDisplacement (bells[(size_t) i], dot); };
     SurfaceExtent extent { 0, 0, 0 };
 
     for (int row = 0; row < rows; ++row)
@@ -110,7 +114,7 @@ inline SurfaceExtent surfaceExtent (const BandSet& bands, const Camera& camera, 
         {
             const float lon = twoPi * (float) column / (float) columns;
             const Vec3 d { cosLat * std::sin (lon), sinLat, cosLat * std::cos (lon) };
-            const float r = surfaceRadius (1.0f + surfaceDisplacement (bands, dirs, d));
+            const float r = surfaceRadius (1.0f + surfaceDisplacement (bands, dirs, d, bell));
             const auto p = camera.toView ({ d.x * r, d.y * r, d.z * r });
             const float perspective = cameraDistance / (cameraDistance - p.z);
             const float y = p.y * perspective;

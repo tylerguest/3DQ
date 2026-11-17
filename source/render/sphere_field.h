@@ -102,6 +102,18 @@ private:
     std::array<float, 3> hazeLevels {};
 
     std::array<float, maxBands> vortexAmount;
+
+    // Each bell's displacement against the chord distance from its centre
+    // (0..2), one row per band slot, rebuilt only when its gain or Q changes.
+    // A particle then looks its bump up instead of working out the response.
+    static constexpr int bellTableSize = 1024;
+    std::vector<float> bellTables;
+    std::array<float, maxBands> bellTableGain, bellTableQ, bellReach2; // bellReach2: squared chord past which it is flat
+
+    const float* bellTable (const Band& b, float& reach2);
+    // A bell's displacement at cosine dot from its centre: from its table when
+    // that is up to date for it, otherwise worked out.
+    float bellAt (const Band& b, float dot) const;
 };
 
 } // namespace threedq

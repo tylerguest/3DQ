@@ -27,7 +27,7 @@ constexpr float cutRingPoleLimit = halfPi - 0.08f;
 void SphereField::addRingDot (Vec3 dir, const BandSet& bands, const BandDirections& dirs, const Camera& camera,
                               const SpriteStyle& style, float alpha, SpriteList& out) const
 {
-    const float r = 1.0f + surfaceDisplacement (bands, dirs, dir);
+    const float r = 1.0f + surfaceDisplacement (bands, dirs, dir, [&] (int i, float dot) { return bellAt (bands.items[(size_t) i], dot); });
     const auto s = camera.toScreen (camera.toView ({ dir.x * r, dir.y * r, dir.z * r }));
     const float facing = 0.2f + 0.8f * std::clamp (s.z + 0.5f, 0.0f, 1.0f);
     const float size = camera.radiusPx() * 0.05f * 1.2f * (cameraDistance / (cameraDistance - s.z));
@@ -199,7 +199,7 @@ void SphereField::addBeltRings (const Band& b, const BandSet& bands, const BandD
         const float t = std::abs (offset);
         const float phase = time * spin / (0.35f + t) + offset * 2.4f;
         const float ringFade = strength * (1.15f - t * 0.75f);
-        const auto& style = ringStyle (gain * std::exp (-2.0f * (1.0f - std::cos (angle)) / (w * w)));
+        const auto& style = ringStyle (peakDbAtAngle (gain, b.q, std::abs (angle)));
         addLatitudeRing (b, lat, phase, style, ringFade, bands, dirs, camera, out);
     }
 }
@@ -256,7 +256,7 @@ void SphereField::addVortex (const Band& b, const BandSet& bands, const BandDire
         const float sa = std::sin (alpha), ca = std::cos (alpha);
         const float phase = time * spin / (0.35f + t) + t * 2.4f; // inner rings turn faster; the offset makes a spiral
         const float ringFade = strength * (1.15f - t * 0.75f);
-        const auto& style = ringStyle (gain * std::exp (-2.0f * (1.0f - ca) / (w * w))); // the bump's own dB at this ring
+        const auto& style = ringStyle (peakDbAtAngle (gain, b.q, alpha)); // the bump's own dB at this ring
 
         for (int j = 0; j < vortexPoints; ++j)
         {

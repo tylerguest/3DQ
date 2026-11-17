@@ -141,6 +141,106 @@ public:
                 }
         }
 
+        beginTest ("Bell shape: the analogue peak, symmetric in log frequency");
+        for (float gain : { -12.0f, 6.0f, 18.0f })
+            for (float q : { 0.5f, 1.0f, 4.0f })
+            {
+                expectWithinAbsoluteError (peakResponseDb (gain, q, 1.0f), gain, 1.0e-4f);
+                expectWithinAbsoluteError (peakResponseDb (gain, q, 3.0f), peakResponseDb (gain, q, 1.0f / 3.0f), 1.0e-4f);
+                expectLessThan (std::abs (peakResponseDb (gain, q, 1000.0f)), 0.01f);
+            }
+
+        beginTest ("The drawn bell matches what the EQ does");
+        {
+            constexpr double sr = 96000.0;
+            for (float q : { 0.5f, 1.0f, 4.0f })
+                for (float gain : { -12.0f, 9.0f })
+                {
+                    dsp::Biquad f;
+                    dsp::designPeak (f, 1000.0, q, gain, sr);
+                    for (float freq : { 200.0f, 700.0f, 1000.0f, 1400.0f, 5000.0f })
+                        expectWithinAbsoluteError ((double) peakResponseDb (gain, q, freq / 1000.0f), responseDb (f, freq, sr), 0.25,
+                                                   "Q " + juce::String (q) + ", " + juce::String (gain) + " dB, " + juce::String (freq) + " Hz");
+                }
+        }
+
+        beginTest ("Surface: a bell's bump along frequency is its response");
+        for (float q : { 0.5f, 1.0f, 4.0f })
+            for (float gain : { -12.0f, 6.0f, 18.0f })
+            {
+                auto b = bandAt (1000.0f, gain);
+                b.q = q;
+                const auto bands = just (b);
+                for (float freq : { 250.0f, 700.0f, 1000.0f, 1190.0f, 1414.0f, 4000.0f })
+                    expectWithinAbsoluteError (displacementAt (bands, freq, 0.0f), gainDisplacement (peakResponseDb (gain, q, freq / 1000.0f)), 1.0e-4f,
+                                               "Q " + juce::String (q) + ", " + juce::String (gain) + " dB, " + juce::String (freq) + " Hz");
+            }
+
+        beginTest ("Bell curve: the quick form agrees with the response everywhere, and is flat only where the skirt is");
+        for (float q : { minQ, 0.5f, 1.0f, 4.0f, maxQ })
+            for (float gain : { -30.0f, -0.2f, 0.0f, 3.0f, 30.0f })
+            {
+                Band b;
+                b.q = q;
+                b.gainDb = gain;
+                const auto curve = bellCurve (b);
+                for (float angle = 0; angle <= pi; angle += 0.005f)
+                    expectWithinAbsoluteError (bellDisplacement (curve, std::cos (angle)), gainDisplacement (peakDbAtAngle (gain, q, angle)), 3.0e-4f,
+                                               "Q " + juce::String (q) + ", " + juce::String (gain) + " dB, " + juce::String (angle) + " rad");
+            }
+
+        beginTest ("Surface: a Q 4 bell half an octave away is down to its real height, not a Gaussian's");
+        {
+            auto b = bandAt (1000.0f, 12.0f);
+            b.q = 4.0f;
+            const float ratio = displacementAt (just (b), 1414.2f, 0.0f) / gainDisplacement (12.0f);
+            const float real = gainShape (peakResponseDb (12.0f, 4.0f, 1.4142f)) / gainShape (12.0f);
+            expectWithinAbsoluteError (ratio, real, 0.01f);
+            expectLessThan (ratio, 0.35f);
+        }
+
+        beginTest ("Surface: a bell's bump is round, as wide in stereo as in frequency");
+        {
+            auto b = bandAt (std::sqrt (minFreq * maxFreq), 12.0f);
+            b.q = 1.0f;
+            const auto bands = just (b);
+            const float angle = 0.2f;
+            const float up = displacementAt (bands, latToFreq (angle), 0.0f);
+            const float across = displacementAt (bands, std::sqrt (minFreq * maxFreq), angle * 180.0f / (float) pi);
+            expectWithinAbsoluteError (across, up, 1.0e-4f);
+        }
+
+        beginTest ("Drawn Q: exact up to the sharpest drawn, then still narrowing, more slowly");
+        {
+            for (float q : { minQ, 0.5f, 1.0f, sharpestDrawnQ })
+                expectEquals (drawnQ (q), q);
+            float previous = drawnQ (sharpestDrawnQ);
+            for (float q = sharpestDrawnQ + 0.5f; q <= maxQ; q += 0.5f)
+            {
+                expectGreaterThan (drawnQ (q), previous);
+                expectLessThan (drawnQ (q), q);
+                previous = drawnQ (q);
+            }
+            expectWithinAbsoluteError (drawnQ (maxQ), 8.0f, 0.1f);
+        }
+
+        beginTest ("Band width: narrower as Q goes up, and where the bump is about a third high");
+        {
+            float previous = 10.0f;
+            for (float q : { minQ, 0.5f, 1.0f, 4.0f, maxQ })
+            {
+                Band b;
+                b.q = q;
+                const float w = bandWidth (b);
+                expectLessThan (w, previous);
+                expectGreaterThan (w, 0.0f);
+                previous = w;
+            }
+            Band b;
+            const float third = gainShape (peakDbAtAngle (12.0f, 1.0f, bandWidth (b))) / gainShape (12.0f);
+            expectWithinAbsoluteError (third, std::exp (-1.0f), 0.01f);
+        }
+
         beginTest ("Axis overlap: full on its own axis, half at right angles, none opposite");
         expectWithinAbsoluteError (axisOverlap (0.0f, 0.0f), 1.0f, 1.0e-6f);
         expectWithinAbsoluteError (axisOverlap (0.0f, halfPi), 0.5f, 1.0e-6f);
@@ -152,7 +252,7 @@ public:
             const auto bands = just (bandAt (1000.0f, 12.0f));
             expectWithinAbsoluteError (displacementAt (bands, 1000.0f, 0.0f), gainDisplacement (12.0f), 1.0e-5f);
             expectLessThan (std::abs (displacementAt (bands, 1000.0f, 180.0f)), 1.0e-4f, "the far side");
-            expectLessThan (std::abs (displacementAt (bands, 20.0f, 0.0f)), 1.0e-4f, "far down the scale");
+            expectLessThan (std::abs (displacementAt (bands, 20.0f, 0.0f)), 0.01f * gainDisplacement (12.0f), "far down the scale");
             expectLessThan (displacementAt (just (bandAt (1000.0f, -12.0f)), 1000.0f, 0.0f), 0.0f, "a cut dents in");
         }
 
