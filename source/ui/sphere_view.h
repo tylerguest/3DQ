@@ -20,6 +20,7 @@
       Shift+double-click      cycle peak -> low cut -> high cut -> low shelf -> high shelf
       right-click a node      mute
       Shift+right-click node  stereo / mono (both channels, or its one stereo position)
+      click a value           type a new one (Return sets it, Escape doesn't)
 
     Hovering the ? button in the bottom-right corner lists these. While there
     are bands, a panel of controls for the selected one floats above the bottom
@@ -104,6 +105,8 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    bool keyPressed (const juce::KeyPress&) override;
+    void focusLost (FocusChangeType) override;
 
 private:
     struct RotateSample
@@ -130,6 +133,9 @@ private:
     {
         int knob = 0;
         float lastY = 0, position = 0;
+        bool fromValue = false; // pressed on its value: it waits to be dragged, as a click there types one
+        float startY = 0;
+        bool moved = false;
     };
 
     struct SharedState
@@ -162,6 +168,7 @@ private:
         int hovered = -1, dragged = -1;
         std::array<float, maxBands> liveLevelDb {};
         bool sidechainConnected = false; // the host is feeding the sidechain input
+        std::optional<ValueEdit> valueEdit; // a value being typed in
         double lastInteraction = 0;
         bool clicked = false; // a click anywhere stops the auto-rotation until the pointer has gone
     };
@@ -194,6 +201,14 @@ private:
     bool dismissPanelPopupLocked();
     void editTrimGain (int which, float db, bool wholeGesture);
 
+    // Typing a value: a click on a band knob's value (knob) or a gain field
+    // (trim) opens a field there, once it's clear the click isn't the first
+    // of a double-click (which resets instead). Keys go to the field until
+    // Return or a click elsewhere sets it, or Escape drops it.
+    void scheduleValueEdit (int knob, int trim);
+    void beginValueEdit (int knob, int trim);
+    void endValueEdit (bool commit);
+
     void pointerMoved (const juce::MouseEvent&);
 
     // Each returns true when the preset bar or its menu took the event.
@@ -216,7 +231,8 @@ private:
     void drawNode (juce::Graphics&, const Band&, Vec3 screen, float emphasis, bool selected, float levelDb);
     void drawLabel (juce::Graphics&, const Band&, Vec3 screen, const Camera&, float liveLevelDb);
     void drawTitle (juce::Graphics&, const Camera&, int soloed);
-    void drawBottomBar (juce::Graphics&, const Camera&, int trimHot, const juce::String& trackName, std::optional<juce::Colour> trackColour);
+    void drawBottomBar (juce::Graphics&, const Camera&, int trimHot, const juce::String& trackName, std::optional<juce::Colour> trackColour,
+                        const std::optional<ValueEdit>& edit);
     void drawHelp (juce::Graphics&, const Camera&, bool hovered, float dt);
     void drawLevelMeter (juce::Graphics&, const Camera&, float dt);
 
@@ -258,7 +274,9 @@ private:
     std::optional<KnobDrag> knobDrag;
     std::optional<float> trimDragY; // last pointer y while dragging a gain field
     int trimDragWhich = 0;
-    float trimDragDb = 0;
+    float trimDragDb = 0, trimDragStartY = 0;
+    bool trimDragMoved = false;
+    int valueEditGeneration = 0; // a press cancels a value edit still waiting to open
     juce::Point<float> lastPosition;
     std::vector<RotateSample> rotateSamples;
     int wheelBand = -1;

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <optional>
 #include "../model/camera.h"
 
 namespace threedq
@@ -41,8 +42,12 @@ struct PanelTarget
     Kind kind = Kind::none;
     int index = 0;        // which type or PanelKnob
     bool inPopup = false; // in the open menu, so clicking it keeps the menu open
+    bool onValue = false; // a knob's value text: a click without dragging types a new one
 
-    bool operator== (const PanelTarget& other) const    { return kind == other.kind && index == other.index && inPopup == other.inPopup; }
+    bool operator== (const PanelTarget& other) const
+    {
+        return kind == other.kind && index == other.index && inPopup == other.inPopup && onValue == other.onValue;
+    }
 };
 
 struct BandPanelLayout
@@ -64,7 +69,25 @@ struct BandPanelLayout
     // position is in component pixels. band: the selected band, or null. Controls
     // the band doesn't show (a stereo band's position, a cut's gear) never hit.
     PanelTarget hit (juce::Point<float> position, bool open, const Band* band) const;
+
+    // Where a knob's value is written, in layout units: the area a typed value
+    // is edited in. Empty for the meter.
+    juce::Rectangle<float> valueArea (int knob) const;
 };
+
+// A value being typed in: a band knob's or one of the gain fields', the text
+// so far, and whether it is all selected (the first key then replaces it).
+struct ValueEdit
+{
+    int knob = -1; // a PanelKnob, or -1
+    int trim = -1; // the gain field: 0 input, 1 output, or -1
+    juce::String text;
+    bool allSelected = true;
+};
+
+// A value being typed: a field over the value with the text, all of it
+// selected until the first key replaces it, or a caret after it.
+void drawValueEntry (juce::Graphics&, juce::Rectangle<float> area, const juce::String& text, bool allSelected, float fontSize, float unit);
 
 // How the view moves as the panel opens, so the sphere starts clear of it. It's
 // worked out once, when the panel opens: zooming or panning after that is
@@ -81,12 +104,25 @@ float knobPosition (const Band&, int knob);
 void setKnobPosition (Band&, int knob, float position);
 void resetKnob (Band&, int knob);
 bool knobEnabled (const Band&, int knob);
+
+// A knob's value as the panel writes it: "1.00 kHz", "+3 dB", "Mid".
+juce::String knobValueText (const Band&, int knob);
+
+// A number typed into a value field: "1.5k" and "2k5" are thousands, and with
+// seconds a trailing s (not ms) is too. Units and spaces are ignored. Empty
+// when there is no number.
+std::optional<float> parseTypedNumber (const juce::String& text, bool seconds = false);
+
+// Sets a knob from what was typed into its value, clamped to its range; a
+// cut's slope goes to the nearest one, and the position also takes L, R, Mid
+// and Side. Returns false, leaving the band alone, when it isn't a value.
+bool setKnobFromText (Band&, int knob, const juce::String& text);
 bool knobIsStepped (const Band&, int knob);
 
 // sidechainConnected: whether the host is feeding the sidechain input.
 // levelDb: what the band's detector hears now, shown against its threshold.
 void drawBandPanel (juce::Graphics&, const BandPanelLayout&, float dpr, float openAmount,
                     const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
-                    float levelDb);
+                    float levelDb, const ValueEdit* edit = nullptr);
 
 } // namespace threedq

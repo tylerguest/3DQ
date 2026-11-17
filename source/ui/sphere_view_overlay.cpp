@@ -355,7 +355,8 @@ void SphereView::drawTitle (juce::Graphics& g, const Camera& camera, int soloed)
 // The ? button has the corner beside it. trimHot: the gain field hovered or
 // dragged (0 input, 1 output), or -1.
 void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, int trimHot,
-                                const juce::String& trackName, std::optional<juce::Colour> trackColour)
+                                const juce::String& trackName, std::optional<juce::Colour> trackColour,
+                                const std::optional<ValueEdit>& edit)
 {
     const float unit = dpr * uiScale (camera.width / dpr, camera.height / dpr);
     const float w = camera.width, bottom = camera.height;
@@ -444,11 +445,17 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, int tri
     }
 
     // The input and output gains: just their values; hovering or dragging
-    // one lights a soft field behind it.
+    // one lights a soft field behind it, and one being typed is a field.
     for (int which = 0; which < 2; ++which)
     {
         const bool hot = trimHot == which;
         const auto field = trimFieldArea (w, bottom, unit, which);
+        if (edit.has_value() && edit->trim == which)
+        {
+            drawValueEntry (g, field.reduced (4.0f * unit, 1.0f * unit), edit->text, edit->allSelected, 11.0f * unit, unit);
+            continue;
+        }
+
         if (hot)
         {
             g.setColour (textColour.withAlpha (0.06f));
@@ -572,7 +579,7 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
     if (helpAmount < 0.01f)
         return;
 
-    static constexpr std::array<std::pair<const char*, const char*>, 17> rows {{
+    static constexpr std::array<std::pair<const char*, const char*>, 19> rows {{
         { "Double-click sphere",        "Add band" },
         { "Double-click band",          "Remove band" },
         { "Drag band",                  "Move band" },
@@ -589,6 +596,8 @@ void SphereView::drawHelp (juce::Graphics& g, const Camera& camera, bool hovered
         { "Shift+right-click band",     "Stereo / mono" },
         { "Shift+double-click band",    "Peak / cuts / shelves" },
         { "Drag bar's dB values",       "Input (left) / output gain" },
+        { "Click a value",              "Type it (Return sets it)" },
+        { "Double-click a knob or value", "Reset it" },
         { "Click empty space",          "Hide panel (click a band: show)" },
     }};
 

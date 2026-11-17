@@ -210,7 +210,7 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
             case Kind::knob:
                 if (knobEnabled (*band, target.index))
                 {
-                    knobDrag = KnobDrag { target.index, e.position.y, knobPosition (*band, target.index) };
+                    knobDrag = KnobDrag { target.index, e.position.y, knobPosition (*band, target.index), target.onValue, e.position.y, false };
                     updateCursorLocked();
                 }
                 break;
@@ -271,6 +271,11 @@ bool SphereView::panelPointerMoved (const juce::MouseEvent& e)
             knobDrag.reset();
             return true;
         }
+
+        // Pressed on its value, it waits for a real drag: a click there types one.
+        knobDrag->moved = knobDrag->moved || std::abs (e.position.y - knobDrag->startY) > valueClickTravel;
+        if (knobDrag->fromValue && ! knobDrag->moved)
+            return true;
 
         const float speed = (e.mods.isShiftDown() ? knobFineFactor : 1.0f) / knobPixelsFullRange;
         knobDrag->position = std::clamp (knobDrag->position + (knobDrag->lastY - e.position.y) * speed, 0.0f, 1.0f);
@@ -349,6 +354,10 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
 
 void SphereView::mouseDown (const juce::MouseEvent& e)
 {
+    // A click anywhere sets a value being typed, and cancels one waiting to open.
+    ++valueEditGeneration;
+    endValueEdit (true);
+
     {
         const std::lock_guard lock (stateLock);
         state.clicked = true;
@@ -375,6 +384,8 @@ void SphereView::mouseDown (const juce::MouseEvent& e)
             return;
 
         trimDragY = e.position.y;
+        trimDragStartY = e.position.y;
+        trimDragMoved = false;
         trimDragWhich = trim;
         trimDragDb = getTrimGain != nullptr ? getTrimGain (trim) : 0.0f;
         if (onTrimGainGesture != nullptr)
@@ -485,6 +496,11 @@ void SphereView::pointerMoved (const juce::MouseEvent& e)
 {
     if (trimDragY.has_value())
     {
+        // It waits for a real drag, as a click without one types a value.
+        trimDragMoved = trimDragMoved || std::abs (e.position.y - trimDragStartY) > valueClickTravel;
+        if (! trimDragMoved)
+            return;
+
         const float perPixel = trimDbPerPixel / uiScale ((float) getWidth(), (float) getHeight());
         const float fine = e.mods.isShiftDown() ? knobFineFactor : 1.0f;
         trimDragDb = std::clamp (trimDragDb + (*trimDragY - e.position.y) * perPixel * fine, -maxTrimGainDb, maxTrimGainDb);
@@ -607,7 +623,12 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
         trimDragY.reset();
         if (onTrimGainGesture != nullptr)
             onTrimGainGesture (trimDragWhich, false);
+        if (! trimDragMoved && e.getNumberOfClicks() == 1)
+            scheduleValueEdit (-1, trimDragWhich);
     }
+
+    if (knobDrag.has_value() && knobDrag->fromValue && ! knobDrag->moved && e.getNumberOfClicks() == 1)
+        scheduleValueEdit (knobDrag->knob, -1);
 
     const std::lock_guard lock (stateLock);
     const auto now = nowSeconds();
@@ -863,6 +884,126 @@ void SphereView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
 
     if (changed)
         notifyBandsEdited (edited);
+}
+
+void SphereView::scheduleValueEdit (int knob, int trim)
+{
+    const int generation = ++valueEditGeneration;
+    juce::Timer::callAfterDelay (juce::MouseEvent::getDoubleClickTimeout(),
+                                 [safeThis = juce::Component::SafePointer (this), generation, knob, trim]
+                                 {
+                                     if (safeThis != nullptr && safeThis->valueEditGeneration == generation)
+                                         safeThis->beginValueEdit (knob, trim);
+                                 });
+}
+
+void SphereView::beginValueEdit (int knob, int trim)
+{
+    juce::String text;
+
+    if (trim >= 0)
+    {
+        if (getTrimGain == nullptr || onTrimGainEdited == nullptr)
+            return;
+        text = trimText (getTrimGain (trim));
+    }
+
+    {
+        const std::lock_guard lock (stateLock);
+
+        if (knob >= 0)
+        {
+            // The panel may have moved on since the click.
+            const auto* band = state.bands.find (state.selected);
+            const bool inPopup = knob == ratioKnob || knob == attackKnob || knob == releaseKnob;
+            if (band == nullptr || ! state.panelOpen || state.panelHidden || ! knobEnabled (*band, knob)
+                || (inPopup && state.panelPopup != PanelPopup::dynamics))
+                return;
+            text = knobValueText (*band, knob);
+        }
+
+        state.valueEdit = ValueEdit { knob, trim, text, true };
+        state.lastInteraction = nowSeconds();
+    }
+
+    setWantsKeyboardFocus (true);
+    grabKeyboardFocus();
+}
+
+void SphereView::endValueEdit (bool commit)
+{
+    std::optional<ValueEdit> edit;
+    BandSet edited;
+    bool changed = false;
+
+    {
+        const std::lock_guard lock (stateLock);
+        edit = std::exchange (state.valueEdit, std::nullopt);
+        if (! edit.has_value())
+            return;
+
+        if (commit && edit->knob >= 0)
+            if (auto* band = state.bands.find (state.selected); band != nullptr && setKnobFromText (*band, edit->knob, edit->text))
+            {
+                edited = state.bands;
+                changed = true;
+            }
+    }
+
+    if (commit && edit->trim >= 0)
+        if (const auto db = parseTypedNumber (edit->text); db.has_value())
+            editTrimGain (edit->trim, *db, true);
+
+    if (changed)
+        notifyBandsEdited (edited);
+
+    setWantsKeyboardFocus (false);
+    if (hasKeyboardFocus (false))
+        giveAwayKeyboardFocus();
+}
+
+bool SphereView::keyPressed (const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::returnKey || key == juce::KeyPress::escapeKey)
+    {
+        const bool editing = [this] { const std::lock_guard lock (stateLock); return state.valueEdit.has_value(); }();
+        if (editing)
+            endValueEdit (key == juce::KeyPress::returnKey);
+        return editing;
+    }
+
+    const std::lock_guard lock (stateLock);
+    if (! state.valueEdit.has_value())
+        return false;
+
+    auto& edit = *state.valueEdit;
+    const auto c = key.getTextCharacter();
+
+    if (key.getModifiers().isCommandDown())
+    {
+        if (key.getKeyCode() == 'A' || key.getKeyCode() == 'a')
+            edit.allSelected = true;
+    }
+    else if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::deleteKey)
+    {
+        edit.text = edit.allSelected ? juce::String() : edit.text.dropLastCharacters (1);
+        edit.allSelected = false;
+    }
+    else if (c >= ' ' && c != 127)
+    {
+        if (edit.allSelected)
+            edit.text.clear();
+        edit.allSelected = false;
+        if (edit.text.length() < 16)
+            edit.text += juce::String::charToString (c);
+    }
+
+    return true; // while typing, keys belong to the field
+}
+
+void SphereView::focusLost (FocusChangeType)
+{
+    endValueEdit (true);
 }
 
 } // namespace threedq

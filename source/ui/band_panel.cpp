@@ -281,7 +281,7 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
         {
             for (int i = 0; i < 3; ++i)
                 if (dynamicsKnobs[(size_t) i].contains (p))
-                    return { Kind::knob, ratioKnob + i, true };
+                    return { Kind::knob, ratioKnob + i, true, valueArea (ratioKnob + i).contains (p) };
             if (sidechain.contains (p))
                 return { Kind::sidechain, 0, true };
         }
@@ -298,11 +298,15 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
         if (next.contains (p))        return { Kind::next };
         if (typePill.contains (p))    return { Kind::typeMenu };
         if (stereo.contains (p))      return { Kind::stereo, p.x >= stereo.getCentreX() ? 1 : 0 }; // 0 = Mono, 1 = Stereo
-        if (positionPill.contains (p) && knobEnabled (*band, posKnob)) return { Kind::knob, posKnob };
+        if (positionPill.contains (p) && knobEnabled (*band, posKnob)) return { Kind::knob, posKnob, false, true };
         if (solo.contains (p))        return { Kind::solo };
         if (mute.contains (p))        return { Kind::mute };
         if (remove.contains (p))      return { Kind::remove };
         if (gear.contains (p) && ! band->isCut()) return { Kind::dynamicsMenu };
+
+        for (int knob : { freqKnob, gainKnob, qKnob })
+            if (valueArea (knob).contains (p) && knobEnabled (*band, knob))
+                return { Kind::knob, knob, false, true };
 
         const float fromGain = p.getDistanceFrom (gainCentre);
         if (fromGain <= gainKnobRadius + 1.0f)
@@ -319,6 +323,52 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
     }
 
     return { Kind::background };
+}
+
+juce::Rectangle<float> BandPanelLayout::valueArea (int knob) const
+{
+    // Matches where drawBandPanel writes each value.
+    switch (knob)
+    {
+        case freqKnob:  return { freqCentre.x - 30.0f, freqCentre.y + 33.0f, 60.0f, 14.0f };
+        case qKnob:     return { qCentre.x - 30.0f, qCentre.y + 33.0f, 60.0f, 14.0f };
+        case gainKnob:  return { gainCentre.x - 30.0f, gainCentre.y + 43.0f, 60.0f, 14.0f };
+        case posKnob:   return positionPill;
+        case ratioKnob:
+        case attackKnob:
+        case releaseKnob:
+        {
+            const auto area = dynamicsKnobs[(size_t) (knob - ratioKnob)];
+            return { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f };
+        }
+        default:        return {};
+    }
+}
+
+void drawValueEntry (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& text, bool allSelected, float fontSize, float unit)
+{
+    const auto font = uiFont (fontSize);
+    const auto field = area.expanded (2.0f * unit, 1.0f * unit);
+    g.setColour (juce::Colour (0xff0d0d0c));
+    g.fillRoundedRectangle (field, 3.0f * unit);
+    g.setColour (textColour.withAlpha (0.35f));
+    g.drawRoundedRectangle (field, 3.0f * unit, 1.0f * unit);
+
+    const float width = juce::GlyphArrangement::getStringWidth (font, text);
+    const float x = area.getCentreX() - width / 2.0f;
+    if (allSelected && text.isNotEmpty())
+    {
+        g.setColour (textColour.withAlpha (0.22f));
+        g.fillRect (juce::Rectangle<float> (x - 1.0f * unit, area.getY() + 1.0f * unit, width + 2.0f * unit, area.getHeight() - 2.0f * unit));
+    }
+
+    g.setFont (font);
+    g.setColour (textColour);
+    g.drawText (text, area, juce::Justification::centred, false);
+
+    // The caret blinks after the text once typing has started.
+    if (! allSelected && (juce::Time::getMillisecondCounter() / 530) % 2 == 0)
+        g.fillRect (juce::Rectangle<float> (x + width + 1.0f * unit, area.getY() + 2.0f * unit, 1.0f * unit, area.getHeight() - 4.0f * unit));
 }
 
 PanelViewFit fitViewAbovePanel (float width, float height, float zoom, float panY, SurfaceExtent extent)
@@ -425,6 +475,105 @@ bool knobEnabled (const Band& b, int knob)
 
 bool knobIsStepped (const Band& b, int knob)    { return knob == qKnob && b.isCut(); }
 
+juce::String knobValueText (const Band& b, int knob)    { return knobText (b, knob); }
+
+std::optional<float> parseTypedNumber (const juce::String& text, bool seconds)
+{
+    auto t = text.toLowerCase().removeCharacters (" \t").replaceCharacter (',', '.');
+    float scale = 1;
+
+    // "2k5": the k stands for the point.
+    const int k = t.indexOfChar ('k');
+    if (k > 0 && k + 1 < t.length() && juce::CharacterFunctions::isDigit (t[k - 1]) && juce::CharacterFunctions::isDigit (t[k + 1]))
+    {
+        t = t.replaceSection (k, 1, ".");
+        scale = 1000;
+    }
+
+    int end = 0;
+    if (end < t.length() && (t[end] == '+' || t[end] == '-'))
+        ++end;
+    bool digits = false, point = false;
+    for (; end < t.length(); ++end)
+    {
+        if (juce::CharacterFunctions::isDigit (t[end]))
+            digits = true;
+        else if (t[end] == '.' && ! point)
+            point = true;
+        else
+            break;
+    }
+
+    if (! digits)
+        return std::nullopt;
+
+    const auto unit = t.substring (end);
+    if (unit.startsWithChar ('k'))
+        scale = 1000;
+    else if (seconds && unit.startsWithChar ('s'))
+        scale = 1000;
+
+    return t.substring (0, end).getFloatValue() * scale;
+}
+
+bool setKnobFromText (Band& b, int knob, const juce::String& text)
+{
+    if (! knobEnabled (b, knob))
+        return false;
+
+    if (knob == posKnob)
+    {
+        const auto word = text.trim().toLowerCase();
+        for (const auto& [names, degrees] : { std::pair { juce::StringArray { "m", "mid", "c", "centre", "center" }, 0.0f },
+                                              std::pair { juce::StringArray { "l", "left" }, -90.0f },
+                                              std::pair { juce::StringArray { "r", "right" }, 90.0f },
+                                              std::pair { juce::StringArray { "s", "side" }, 180.0f } })
+            if (names.contains (word))
+            {
+                b.lon = degrees * pi / 180.0f;
+                return true;
+            }
+    }
+
+    if (knob == rangeKnob && text.trim().equalsIgnoreCase ("off"))
+    {
+        b.range = 0;
+        return true;
+    }
+
+    const auto value = parseTypedNumber (text, knob == attackKnob || knob == releaseKnob);
+    if (! value.has_value())
+        return false;
+
+    const float v = *value;
+
+    switch (knob)
+    {
+        case freqKnob:  b.lat = freqToLat (std::clamp (v, minFreq, maxFreq)); break;
+        case gainKnob:  b.gainDb = snapDb (std::clamp (v, -maxGainDb, maxGainDb)); break;
+        case qKnob:
+            if (b.isCut())
+                b.slope = *std::min_element (cutSlopes.begin(), cutSlopes.end(),
+                                             [v] (int x, int y) { return std::abs ((float) x - v) < std::abs ((float) y - v); });
+            else
+                b.q = std::clamp (v, minQ, qCeiling (b));
+            break;
+        case posKnob:   b.lon = std::clamp (v, -180.0f, 180.0f) * pi / 180.0f; break;
+        case rangeKnob:
+            b.range = snapDb (std::clamp (v, -maxGainDb, maxGainDb));
+            if (std::abs (b.range) < 0.05f)
+                b.range = 0;
+            break;
+        case thresholdKnob: b.threshold = snapDb (std::clamp (v, minThresholdDb, maxThresholdDb)); break;
+        case ratioKnob:   b.ratio = std::round (std::clamp (v, minRatio, maxRatio) * 10.0f) / 10.0f; break;
+        case attackKnob:  b.attackMs = std::clamp (v, minAttackMs, maxAttackMs); break;
+        case releaseKnob: b.releaseMs = std::clamp (v, minReleaseMs, maxReleaseMs); break;
+        default:          return false;
+    }
+
+    return true;
+}
+
 namespace
 {
 // A knob: a dark disc with a thin arc just inside its edge for the value (from
@@ -475,9 +624,11 @@ void drawKnob (juce::Graphics& g, juce::Point<float> c, float radius, float posi
 
 void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, float amount,
                     const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
-                    float levelDb)
+                    float levelDb, const ValueEdit* edit)
 {
     using Kind = PanelTarget::Kind;
+    const auto editing = [edit] (int knob) { return edit != nullptr && edit->knob == knob; };
+    const auto entry = [&] (juce::Rectangle<float> area) { drawValueEntry (g, area, edit->text, edit->allSelected, 10.5f, 1.0f); };
 
     const juce::Graphics::ScopedSaveState saved (g);
     g.addTransform (juce::AffineTransform::scale (dpr * l.scale));
@@ -621,7 +772,10 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 if (enabled)
                 {
                     pill (l.positionPill, false, lit);
-                    text (knobText (*band, posKnob), l.positionPill.withTrimmedBottom (4.0f), 10.0f, faded (lit ? bright : bright.withAlpha (0.85f)));
+                    if (editing (posKnob))
+                        entry (l.positionPill.withTrimmedBottom (4.0f).reduced (4.0f, 1.0f));
+                    else
+                        text (knobText (*band, posKnob), l.positionPill.withTrimmedBottom (4.0f), 10.0f, faded (lit ? bright : bright.withAlpha (0.85f)));
                     const float y = l.positionPill.getBottom() - 4.0f, x0 = l.positionPill.getX() + 10.0f, x1 = l.positionPill.getRight() - 10.0f;
                     g.setColour (faded (textColour.withAlpha (0.18f)));
                     g.drawLine (x0, y, x1, y, 1.0f);
@@ -638,8 +792,11 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 knob (c, sideKnobRadius, which, lit, enabled);
                 const float dim = enabled ? 1.0f : 0.32f;
                 caption (knobName (*band, which), { c.x - 40.0f, c.y + 21.0f, 80.0f, 12.0f }, faded (idle.withMultipliedAlpha (dim)));
-                text (knobText (*band, which), { c.x - 40.0f, c.y + 33.0f, 80.0f, 14.0f }, 10.5f,
-                      faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
+                if (editing (which))
+                    entry (l.valueArea (which));
+                else
+                    text (knobText (*band, which), { c.x - 40.0f, c.y + 33.0f, 80.0f, 14.0f }, 10.5f,
+                          faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
             };
             sideKnob (l.freqCentre, freqKnob);
             sideKnob (l.qCentre, qKnob);
@@ -733,7 +890,9 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 const bool showValue = enabled || shown != gainKnob; // a cut has no gain: just its name, dimmed
                 caption (shown == gainKnob ? "GAIN" : knobName (*band, shown), { c.x - 40.0f, c.y + 31.0f, 80.0f, 12.0f },
                          faded (idle.withMultipliedAlpha (showValue ? 1.0f : 0.32f)));
-                if (showValue)
+                if (editing (gainKnob))
+                    entry (l.valueArea (gainKnob));
+                else if (showValue)
                     text (knobText (*band, shown), { c.x - 40.0f, c.y + 43.0f, 80.0f, 14.0f }, 10.5f, faded (bright));
 
             }
@@ -781,8 +940,11 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                     const float dim = dynamicsUsable ? 1.0f : 0.32f;
                     caption (knobName (*band, which), { area.getX(), area.getY(), area.getWidth(), 12.0f }, faded (idle.withMultipliedAlpha (dim)));
                     knob ({ area.getCentreX(), area.getY() + 27.0f }, popupKnobRadius, which, lit, dynamicsUsable);
-                    text (knobText (*band, which), { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f }, 10.5f,
-                          faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
+                    if (editing (which))
+                        entry (l.valueArea (which).reduced (4.0f, 0.0f));
+                    else
+                        text (knobText (*band, which), { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f }, 10.5f,
+                              faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
                 }
 
                 // GR: how far the band has moved, a bar that fills down from the

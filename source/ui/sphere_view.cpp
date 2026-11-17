@@ -383,6 +383,7 @@ void SphereView::renderOpenGL()
     BandSet bands;
     Camera camera;
     int hovered, dragged, selected, soloed, activeKnob;
+    std::optional<ValueEdit> valueEdit;
     bool helpHovered, panelOpen;
     int trimHot;
     float panelAmount;
@@ -525,6 +526,7 @@ void SphereView::renderOpenGL()
         panelHover = state.panelHover;
         panelPopup = state.panelOpen ? state.panelPopup : PanelPopup::none;
         activeKnob = knobDrag.has_value() ? knobDrag->knob : -1;
+        valueEdit = state.valueEdit;
 
         const float panelGoal = panelOpen ? 1.0f : 0.0f;
         state.panelAmount += (panelGoal - state.panelAmount) * (1.0f - std::exp (-dt / 0.08f));
@@ -574,9 +576,10 @@ void SphereView::renderOpenGL()
         juce::Graphics g (*overlay);
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
-        drawBottomBar (g, camera, trimHot, trackName, trackColour);
+        drawBottomBar (g, camera, trimHot, trackName, trackColour, valueEdit);
         drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup), dpr, panelAmount,
-                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb);
+                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb,
+                       valueEdit.has_value() && valueEdit->knob >= 0 ? &*valueEdit : nullptr);
         drawLevelMeter (g, camera, dt);
         drawHelp (g, camera, helpHovered, dt);
         presetMenuAmount += ((presetMenuOpen ? 1.0f : 0.0f) - presetMenuAmount) * (1.0f - std::exp (-dt / 0.06f));

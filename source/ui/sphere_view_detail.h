@@ -19,6 +19,7 @@ constexpr float nodeHitRadius = 16.0f;
 constexpr float dragThreshold = 4.0f;
 // A press this short counts as a click even if the hand drifted past dragThreshold.
 constexpr float clickMaxTravel = 10.0f;
+constexpr float valueClickTravel = 3.0f; // a press on a value that moves further is a drag, not a click to type
 constexpr double clickMaxSeconds = 0.35;
 constexpr float rotateSpeed = 0.008f;     // radians per pixel
 constexpr float gainDbPerPixel = 0.1f;

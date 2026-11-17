@@ -98,10 +98,125 @@ public:
             expect (hitAt (l.gear.getCentre()).kind == Kind::dynamicsMenu, "gear " + name);
             expect (hitAt (l.stereo.getCentre().translated (-10.0f, 0.0f)) == PanelTarget { Kind::stereo, 0 }, "mono half " + name);
             expect (hitAt (l.stereo.getCentre().translated (10.0f, 0.0f)) == PanelTarget { Kind::stereo, 1 }, "stereo half " + name);
-            expect (hitAt (l.positionPill.getCentre()) == PanelTarget { Kind::knob, posKnob }, "position " + name);
+            expect (hitAt (l.positionPill.getCentre()) == PanelTarget { Kind::knob, posKnob, false, true }, "position: the pill is its value " + name);
             expect (hitAt (l.gainCentre) == PanelTarget { Kind::knob, gainKnob }, "gain " + name);
             expect (hitAt (l.freqCentre) == PanelTarget { Kind::knob, freqKnob }, "freq " + name);
             expect (hitAt (l.qCentre) == PanelTarget { Kind::knob, qKnob }, "q " + name);
+        }
+
+        beginTest ("A knob's value hits as that knob, marked as its value; the knob itself isn't");
+        for (const auto [w, h] : windowSizes)
+        {
+            const auto name = sizeName (w, h);
+            const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
+            for (int knob : { freqKnob, gainKnob, qKnob })
+                expect (l.hit (l.valueArea (knob).getCentre() * l.scale, true, &peak) == PanelTarget { Kind::knob, knob, false, true },
+                        juce::String (knob) + " " + name);
+            expect (! l.hit (l.gainCentre * l.scale, true, &peak).onValue, name);
+
+            Band cut;
+            cut.type = FilterType::highCut;
+            expect (! l.hit (l.valueArea (gainKnob).getCentre() * l.scale, true, &cut).onValue, "a cut has no gain to type " + name);
+
+            const auto menu = BandPanelLayout::make (w, h, 1.0f, PanelPopup::dynamics);
+            for (int knob : { ratioKnob, attackKnob, releaseKnob })
+            {
+                expect (menu.hit (menu.valueArea (knob).getCentre() * menu.scale, true, &peak) == PanelTarget { Kind::knob, knob, true, true },
+                        juce::String (knob) + " " + name);
+                expect (menu.dynamicsKnobs[(size_t) (knob - ratioKnob)].contains (menu.valueArea (knob)), name);
+            }
+        }
+
+        beginTest ("Typed numbers: signs, points, commas, k for thousands, units ignored");
+        {
+            const auto near = [this] (const juce::String& text, float expected, bool seconds = false)
+            {
+                const auto v = parseTypedNumber (text, seconds);
+                expect (v.has_value(), text);
+                if (v.has_value())
+                    expectWithinAbsoluteError (*v, expected, 1.0e-3f, text);
+            };
+            near ("250", 250.0f);
+            near ("250 Hz", 250.0f);
+            near ("1.5k", 1500.0f);
+            near ("1.5 kHz", 1500.0f);
+            near ("2k5", 2500.0f);
+            near ("-6", -6.0f);
+            near ("+3.5 dB", 3.5f);
+            near ("0,7", 0.7f);
+            near (".5", 0.5f);
+            near ("4:1", 4.0f);
+            near ("+45" + juce::String::charToString ((juce::juce_wchar) 0xb0), 45.0f);
+            near ("90 ms", 90.0f, true);
+            near ("0.2 s", 200.0f, true);
+            near ("0.2s", 0.2f);
+            for (auto bad : { "", "dB", "-", "k", "abc" })
+                expect (! parseTypedNumber (bad).has_value(), bad);
+        }
+
+        beginTest ("Typing sets a knob, clamped to its range; nonsense leaves it alone");
+        {
+            Band b;
+            expect (setKnobFromText (b, freqKnob, "2.5k"));
+            expectWithinAbsoluteError (latToFreq (b.lat), 2500.0f, 0.5f);
+            expect (setKnobFromText (b, freqKnob, "5"));
+            expectWithinAbsoluteError (latToFreq (b.lat), minFreq, 0.01f);
+
+            expect (setKnobFromText (b, gainKnob, "-6.5 dB"));
+            expectEquals (b.gainDb, -6.5f);
+            expect (setKnobFromText (b, gainKnob, "99"));
+            expectEquals (b.gainDb, maxGainDb);
+
+            expect (setKnobFromText (b, qKnob, "4"));
+            expectEquals (b.q, 4.0f);
+            Band shelf;
+            shelf.type = FilterType::lowShelf;
+            expect (setKnobFromText (shelf, qKnob, "10"));
+            expectEquals (shelf.q, maxShelfQ, "a shelf's Q stops lower");
+            Band cut;
+            cut.type = FilterType::lowCut;
+            expect (setKnobFromText (cut, qKnob, "40 dB/oct"));
+            expectEquals (cut.slope, 36, "a cut's slope goes to the nearest one");
+            expect (! setKnobFromText (cut, gainKnob, "3"), "a cut has no gain");
+
+            for (const auto& [text, degrees] : { std::pair { "L", -90.0f }, std::pair { "right", 90.0f }, std::pair { "Mid", 0.0f },
+                                                 std::pair { "side", 180.0f }, std::pair { "-30", -30.0f }, std::pair { "400", 180.0f } })
+            {
+                expect (setKnobFromText (b, posKnob, text), text);
+                expectWithinAbsoluteError (b.lon * 180.0f / (float) pi, degrees, 1.0e-3f, text);
+            }
+
+            expect (setKnobFromText (b, rangeKnob, "-8"));
+            expectEquals (b.range, -8.0f);
+            expect (setKnobFromText (b, rangeKnob, "off"));
+            expectEquals (b.range, 0.0f);
+            expect (setKnobFromText (b, thresholdKnob, "-100"));
+            expectEquals (b.threshold, minThresholdDb);
+            expect (setKnobFromText (b, ratioKnob, "4:1"));
+            expectEquals (b.ratio, 4.0f);
+            expect (setKnobFromText (b, attackKnob, "10 ms"));
+            expectEquals (b.attackMs, 10.0f);
+            expect (setKnobFromText (b, releaseKnob, "1.5 s"));
+            expectEquals (b.releaseMs, 1500.0f);
+
+            const Band before = b;
+            expect (! setKnobFromText (b, gainKnob, "loud"));
+            expect (! setKnobFromText (b, freqKnob, ""));
+            expectEquals (b.gainDb, before.gainDb);
+            expectEquals (b.lat, before.lat);
+            expect (! setKnobFromText (b, liveGainMeter, "3"), "the meter is a readout");
+        }
+
+        beginTest ("A knob's typed text starts as the value it shows");
+        {
+            Band b;
+            b.gainDb = 3.0f;
+            expectEquals (knobValueText (b, gainKnob), juce::String ("+3.0 dB"));
+            expect (setKnobFromText (b, gainKnob, knobValueText (b, gainKnob)), "what's shown reads back");
+            expectEquals (b.gainDb, 3.0f);
+            b.lat = freqToLat (1500.0f);
+            expect (setKnobFromText (b, freqKnob, knobValueText (b, freqKnob)));
+            expectWithinAbsoluteError (latToFreq (b.lat), 1500.0f, 1.0f);
         }
 
         beginTest ("Controls a band doesn't show never hit: a stereo band's position, a cut's gear");
