@@ -93,7 +93,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
                                                                       juce::NormalisableRange<float> { minThresholdDb, maxThresholdDb, 0.1f }, -30.0f,
                                                                       juce::AudioParameterFloatAttributes().withLabel ("dB")));
         group->addChild (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { ids.type, 1 }, name + "Type",
-                                                                       juce::StringArray { "Peak", "Low Cut", "High Cut", "Low Shelf", "High Shelf" }, 0));
+                                                                       juce::StringArray { "Peak", "High Pass", "Low Pass", "Low Shelf", "High Shelf" }, 0));
         juce::StringArray slopeNames;
         for (auto s : cutSlopes)
             slopeNames.add (juce::String (s) + " dB/oct");

@@ -89,22 +89,37 @@ public:
             const auto name = sizeName (w, h);
             auto hitAt = [&] (juce::Point<float> p)    { return l.hit (p * l.scale, true, &peak); };
 
-            expect (hitAt (l.previous.getCentre()).kind == Kind::previous, "previous " + name);
-            expect (hitAt (l.next.getCentre()).kind == Kind::next, "next " + name);
-            expect (hitAt (l.typePill.getCentre()).kind == Kind::typeMenu, "type " + name);
+            expect (hitAt (l.power.getCentre()).kind == Kind::mute, "on / off " + name);
             expect (hitAt (l.solo.getCentre()).kind == Kind::solo, "solo " + name);
-            expect (hitAt (l.mute.getCentre()).kind == Kind::mute, "mute " + name);
-            expect (hitAt (l.remove.getCentre()).kind == Kind::remove, "remove " + name);
             expect (hitAt (l.gear.getCentre()).kind == Kind::dynamicsMenu, "gear " + name);
-            expect (hitAt (l.stereo.getCentre().translated (-10.0f, 0.0f)) == PanelTarget { Kind::stereo, 0 }, "mono half " + name);
-            expect (hitAt (l.stereo.getCentre().translated (10.0f, 0.0f)) == PanelTarget { Kind::stereo, 1 }, "stereo half " + name);
-            expect (hitAt (l.positionPill.getCentre()) == PanelTarget { Kind::knob, posKnob, false, true }, "position: the pill is its value " + name);
+            expect (hitAt (l.previous.getCentre()).kind == Kind::previous, "previous " + name);
+            expect (hitAt (l.number.getCentre()).kind == Kind::bandList, "the number opens the band list " + name);
+            expect (hitAt (l.next.getCentre()).kind == Kind::next, "next " + name);
+            expect (hitAt (l.remove.getCentre()).kind == Kind::remove, "remove " + name);
+            expect (hitAt (l.close.getCentre()).kind == Kind::close, "close " + name);
+            expect (hitAt (l.typePill.getCentre()).kind == Kind::typeMenu, "type " + name);
+            expect (hitAt (l.stereoPill.getCentre()).kind == Kind::stereoMenu, "stereo " + name);
             expect (hitAt (l.gainCentre) == PanelTarget { Kind::knob, gainKnob }, "gain " + name);
             expect (hitAt (l.freqCentre) == PanelTarget { Kind::knob, freqKnob }, "freq " + name);
             expect (hitAt (l.qCentre) == PanelTarget { Kind::knob, qKnob }, "q " + name);
         }
 
-        beginTest ("A knob's value hits as that knob, marked as its value; the knob itself isn't");
+        beginTest ("Gain's rings: the inner one is the threshold, the outer one the range, each wide enough to grab");
+        for (const auto [w, h] : windowSizes)
+        {
+            const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
+            const auto name = sizeName (w, h);
+            for (const float angle : { -2.0f, -1.0f, 0.0f, 1.0f, 2.0f })
+            {
+                const auto at = [&] (float r) { return l.hit ((l.gainCentre + juce::Point<float> (std::sin (angle) * r, -std::cos (angle) * r)) * l.scale, true, &peak); };
+                for (const float r : { 33.0f, 36.5f, 40.0f })
+                    expect (at (r) == PanelTarget { Kind::knob, thresholdKnob }, "threshold at " + juce::String (r) + " " + name);
+                for (const float r : { 41.0f, 44.5f, 48.0f })
+                    expect (at (r) == PanelTarget { Kind::knob, rangeKnob }, "range at " + juce::String (r) + " " + name);
+            }
+        }
+
+        beginTest ("A knob's name is its value: it hits as that knob, marked as its value; the knob itself isn't");
         for (const auto [w, h] : windowSizes)
         {
             const auto name = sizeName (w, h);
@@ -113,6 +128,7 @@ public:
                 expect (l.hit (l.valueArea (knob).getCentre() * l.scale, true, &peak) == PanelTarget { Kind::knob, knob, false, true },
                         juce::String (knob) + " " + name);
             expect (! l.hit (l.gainCentre * l.scale, true, &peak).onValue, name);
+            expectWithinAbsoluteError (l.valueArea (freqKnob).getY(), l.valueArea (gainKnob).getY(), 1.0e-3f, "the names share a line " + name);
 
             Band cut;
             cut.type = FilterType::highCut;
@@ -125,6 +141,10 @@ public:
                         juce::String (knob) + " " + name);
                 expect (menu.dynamicsKnobs[(size_t) (knob - ratioKnob)].contains (menu.valueArea (knob)), name);
             }
+
+            const auto stereoMenu = BandPanelLayout::make (w, h, 1.0f, PanelPopup::stereo);
+            expect (stereoMenu.hit (stereoMenu.valueArea (posKnob).getCentre() * stereoMenu.scale, true, &peak) == PanelTarget { Kind::knob, posKnob, true, true },
+                    "the position's value " + name);
         }
 
         beginTest ("Typed numbers: signs, points, commas, k for thousands, units ignored");
@@ -219,19 +239,21 @@ public:
             expectWithinAbsoluteError (latToFreq (b.lat), 1500.0f, 1.0f);
         }
 
-        beginTest ("Controls a band doesn't show never hit: a stereo band's position, a cut's gear");
+        beginTest ("Controls a band doesn't have never hit: a cut's gear, a stereo band's position value");
         for (const auto [w, h] : windowSizes)
         {
             const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
+            const auto menu = BandPanelLayout::make (w, h, 1.0f, PanelPopup::stereo);
             const auto name = sizeName (w, h);
             Band stereo;
             stereo.stereo = true;
             Band cut;
             cut.type = FilterType::lowCut;
 
-            expect (l.hit (l.positionPill.getCentre() * l.scale, true, &stereo).kind == Kind::background, "stereo position " + name);
             expect (l.hit (l.gear.getCentre() * l.scale, true, &cut).kind == Kind::background, "cut gear " + name);
             expect (l.hit (l.gear.getCentre() * l.scale, true, &stereo).kind == Kind::dynamicsMenu, "a stereo peak keeps its gear " + name);
+            expect (menu.hit (menu.positionValue.getCentre() * menu.scale, true, &stereo).kind == Kind::background, "stereo: no position to type " + name);
+            expect (menu.hit (menu.positionSlider.getCentre() * menu.scale, true, &stereo).kind == Kind::positionSlider, "but the slider makes it mono " + name);
         }
 
         beginTest ("Host track colours: alpha 0 still counts, all zeros is none");
@@ -243,40 +265,46 @@ public:
             expect (SphereView::hostTrackColour (0x80336699u) == juce::Colour (0x80336699u), "so is a partial alpha");
         }
 
-        beginTest ("The side controls sit in the panel's shoulders, below the wave, and don't overlap");
+        beginTest ("The corner controls sit on the body, inside it, clear of the knobs and each other");
         for (const auto [w, h] : windowSizes)
         {
             const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
             const auto name = sizeName (w, h);
-            const float shoulder = l.panel.getY() + 30.0f;
+            const float body = l.panel.getY() + 36.0f;
+            const std::array controls { l.power, l.solo, l.gear, l.previous, l.number, l.next, l.remove, l.close, l.typePill, l.stereoPill };
 
-            for (const auto& r : { l.previous, l.next, l.typePill, l.solo, l.mute, l.remove, l.stereo, l.positionPill })
+            for (size_t i = 0; i < controls.size(); ++i)
             {
-                expectGreaterOrEqual (r.getY(), shoulder, "below the shoulder " + name);
-                expectLessOrEqual (r.getBottom(), l.panel.getBottom(), "inside the panel " + name);
-                expect (l.panel.contains (r), name);
+                expectGreaterOrEqual (controls[i].getY(), body, "below the body's top " + name);
+                expect (l.panel.contains (controls[i]), "inside the panel " + name);
+                for (size_t j = i + 1; j < controls.size(); ++j)
+                    expect (! controls[i].intersects (controls[j]), juce::String ((int) i) + " and " + juce::String ((int) j) + " " + name);
             }
 
-            expectLessOrEqual (l.previous.getBottom(), l.typePill.getY(), name);
-            expectLessOrEqual (l.solo.getBottom(), l.stereo.getY(), name);
-            expectLessOrEqual (l.stereo.getBottom(), l.positionPill.getY(), name);
-            expectLessThan (l.typePill.getRight(), l.freqCentre.x - 17.0f, "the type pill is clear of Freq " + name);
-            expectGreaterThan (l.stereo.getX(), l.qCentre.x + 17.0f, "stereo is clear of Q " + name);
+            constexpr float sideKnob = 22.0f, gainWell = 51.0f; // the housing round it
+            expectLessThan (l.typePill.getRight(), l.freqCentre.x - sideKnob, "the type pill is clear of Freq " + name);
+            expectGreaterThan (l.stereoPill.getX(), l.qCentre.x + sideKnob, "stereo is clear of Q " + name);
+            expectLessThan (l.gear.getRight(), l.freqCentre.x - sideKnob, "the left tools are clear of Freq " + name);
+            expectGreaterThan (l.previous.getX(), l.qCentre.x + sideKnob, "the right ones of Q " + name);
+            for (const auto centre : { l.freqCentre, l.qCentre })
+                expectGreaterThan (centre.getDistanceFrom (l.gainCentre) - sideKnob - gainWell, 6.0f, "Freq and Q don't touch Gain's housing " + name);
         }
 
-        beginTest ("The outline: a crown over Gain, lower shoulders either side");
+        beginTest ("The outline: Gain's housing rises over the body's top edge, nothing else does");
         {
             const auto l = BandPanelLayout::make (760.0f, 560.0f, 1.0f, PanelPopup::none);
             auto hitAt = [&] (float x, float y)    { return l.hit (juce::Point<float> (x, y) * l.scale, true, &peak).kind; };
             const float top = l.panel.getY();
 
-            expect (hitAt (l.panel.getCentreX(), top + 6.0f) != Kind::none, "the crown rises over the centre");
-            expect (hitAt (l.panel.getX() + 30.0f, top + 6.0f) == Kind::none, "left of it the panel starts lower");
-            expect (hitAt (l.panel.getRight() - 30.0f, top + 6.0f) == Kind::none, "and right of it");
-            expect (hitAt (l.panel.getX() + 30.0f, top + 34.0f) != Kind::none, "the shoulder itself is panel");
+            expect (hitAt (l.panel.getCentreX(), top + 2.0f) != Kind::none, "the housing reaches the top");
+            expect (hitAt (l.panel.getCentreX() - 25.0f, top + 10.0f) != Kind::none, "round over Gain");
+            expect (hitAt (l.panel.getCentreX() - 60.0f, top + 10.0f) == Kind::none, "but no wider");
+            expect (hitAt (l.panel.getX() + 30.0f, top + 10.0f) == Kind::none, "left of it the panel starts lower");
+            expect (hitAt (l.panel.getRight() - 30.0f, top + 10.0f) == Kind::none, "and right of it");
+            expect (hitAt (l.panel.getX() + 30.0f, top + 40.0f) != Kind::none, "the body itself is panel");
             expect (hitAt (l.panel.getX() + 1.0f, l.panel.getBottom() - 1.0f) == Kind::none, "rounded corners");
             expect (hitAt (l.panel.getCentreX(), l.panel.getBottom() + 4.0f) == Kind::none, "nothing below it");
-            expect (hitAt (l.panel.getCentreX() - 60.0f, l.panel.getBottom() - 6.0f) == Kind::background, "empty panel is background");
+            expect (hitAt (l.panel.getX() + 30.0f, top + 72.0f) == Kind::background, "empty panel is background");
         }
 
         beginTest ("Closed, nothing hits; with no band, the panel is only background");
@@ -301,21 +329,85 @@ public:
             expect (l.hit (l.typeItems[0].getCentre() * l.scale, true, nullptr).kind == Kind::none, "no band, no menu " + name);
         }
 
-        beginTest ("The dynamics menu floats above the crown, inside the window, with its knobs and sidechain");
+        beginTest ("The stereo menu opens above its pill, inside the window: its choices, then the position slider");
+        for (const auto [w, h] : windowSizes)
+        {
+            const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::stereo);
+            const auto name = sizeName (w, h);
+            expectLessOrEqual (l.popupArea.getBottom(), l.stereoPill.getY(), name);
+            expectLessOrEqual (l.popupArea.getRight(), l.panel.getRight(), name);
+            expectGreaterOrEqual (l.popupArea.getY(), 0.0f, name);
+            for (int i = 0; i < numStereoChoices; ++i)
+                expect (l.hit (l.stereoItems[(size_t) i].getCentre() * l.scale, true, &peak) == PanelTarget { Kind::stereoItem, i, true }, name);
+            expect (l.hit (l.positionSlider.getCentre() * l.scale, true, &peak) == PanelTarget { Kind::positionSlider, 0, true }, name);
+            expectGreaterThan (l.positionSlider.getY(), l.stereoItems[numStereoChoices - 1].getBottom(), "the slider is last " + name);
+        }
+
+        beginTest ("Stereo choices: both channels, or Mid, Side, Left and Right; the one a band is at shows as on");
+        {
+            Band b;
+            applyStereoChoice (b, stereoSide);
+            expect (! b.stereo && stereoChoiceIsOn (b, stereoSide) && ! stereoChoiceIsOn (b, stereoMid));
+            applyStereoChoice (b, stereoLeft);
+            expectWithinAbsoluteError (b.lon, -halfPi, 1.0e-6f);
+            expect (stereoChoiceIsOn (b, stereoLeft));
+            applyStereoChoice (b, stereoBoth);
+            expect (b.stereo && stereoChoiceIsOn (b, stereoBoth) && ! stereoChoiceIsOn (b, stereoLeft), "stereo: no position is on");
+            expectWithinAbsoluteError (b.lon, -halfPi, 1.0e-6f, "the position stays for when it's mono again");
+            applyStereoChoice (b, stereoRight);
+            expect (! b.stereo && stereoChoiceIsOn (b, stereoRight));
+        }
+
+        beginTest ("The dynamics sit on the left shoulder, clear of Gain's housing, pointing at the gear");
         for (const auto [w, h] : windowSizes)
         {
             const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::dynamics);
             const auto name = sizeName (w, h);
-            expectLessThan (l.popupArea.getBottom(), l.panel.getY(), "above the crown " + name);
+            expectLessThan (l.popupArea.getBottom(), l.panel.getY() + 36.0f, "above the body " + name);
             expectGreaterOrEqual (l.popupArea.getY(), 0.0f, name);
-            expectGreaterOrEqual (l.popupArea.getX(), 0.0f, name);
-            expectLessOrEqual (l.popupArea.getRight() * l.scale, w, name);
-            expectWithinAbsoluteError (l.popupArea.getCentreX(), l.panel.getCentreX(), 1.0e-3f, "centred " + name);
+            expectWithinAbsoluteError (l.popupArea.getX(), l.panel.getX(), 1.0e-3f, "on the left edge " + name);
+            expectWithinAbsoluteError (l.arrowX, l.gear.getCentreX(), 1.0e-3f, name);
+            expect (l.hit (juce::Point<float> (l.popupArea.getRight() + 1.0f, l.popupArea.getBottom() - 1.0f) * l.scale, true, &peak).kind == Kind::none,
+                    "the housing starts past it " + name);
 
             for (int i = 0; i < 3; ++i)
                 expect (l.hit (l.dynamicsKnobs[(size_t) i].getCentre() * l.scale, true, &peak) == PanelTarget { Kind::knob, ratioKnob + i, true }, name);
             expect (l.hit (l.sidechain.getCentre() * l.scale, true, &peak) == PanelTarget { Kind::sidechain, 0, true }, name);
-            expect (! l.sidechain.intersects (l.dynamicsKnobs[2]), name);
+            expect (! l.sidechain.intersects (l.dynamicsKnobs[0]), name);
+            expectLessOrEqual (l.grMeter.getRight(), l.popupArea.getRight(), name);
+        }
+
+        beginTest ("The band list sits on the right shoulder, a row per band, every band fitting in the window");
+        for (const auto [w, h] : windowSizes)
+            for (const int count : { 1, 4, maxBands })
+            {
+                const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::bands, count);
+                const auto name = sizeName (w, h) + " with " + juce::String (count);
+                expectWithinAbsoluteError (l.popupArea.getRight(), l.panel.getRight(), 1.0e-3f, "on the right edge " + name);
+                expectWithinAbsoluteError (l.arrowX, l.number.getCentreX(), 1.0e-3f, name);
+                expectLessThan (l.popupArea.getBottom(), l.panel.getY() + 36.0f, name);
+                expectGreaterOrEqual (l.popupArea.getY(), 0.0f, "inside the window " + name);
+                for (int i = 0; i < count; ++i)
+                {
+                    expect (l.hit (l.bandItems[(size_t) i].getCentre() * l.scale, true, &peak) == PanelTarget { Kind::bandItem, i, true }, name);
+                    if (i > 0)
+                        expectGreaterOrEqual (l.bandItems[(size_t) i].getY(), l.bandItems[(size_t) i - 1].getBottom() - 1.0e-3f, name);
+                }
+            }
+
+        beginTest ("Bands by frequency: low to high, whatever order they were added in");
+        {
+            BandSet set;
+            for (const float f : { 5000.0f, 80.0f, 900.0f })
+            {
+                Band b;
+                b.lat = freqToLat (f);
+                b.id = set.count;
+                set.items[(size_t) set.count++] = b;
+            }
+            std::array<const Band*, maxBands> order;
+            expectEquals (bandsByFrequency (set, order), 3);
+            expect (order[0]->id == 1 && order[1]->id == 2 && order[2]->id == 0);
         }
     }
 };

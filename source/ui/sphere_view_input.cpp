@@ -161,12 +161,14 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
         if (! e.mods.isLeftButtonDown())
             return true;
 
-        // The types list closes on anything but itself. The dynamics menu stays
-        // up while the panel is used, until the gear is clicked again, the
-        // types list opens over it, or a click lands off the panel and menus.
+        // The type and stereo menus and the band list close on anything but
+        // themselves. The dynamics menu stays up while the panel is used,
+        // until the gear is clicked again, another menu opens over it, or a
+        // click lands off the panel and menus.
         const auto popupBefore = state.panelPopup;
-        if (! target.inPopup && popupBefore == PanelPopup::types)
+        if (! target.inPopup && popupBefore != PanelPopup::dynamics)
             state.panelPopup = PanelPopup::none;
+        const auto toggle = [&] (PanelPopup popup) { state.panelPopup = popupBefore == popup ? PanelPopup::none : popup; };
 
         auto* band = state.bands.find (state.selected);
 
@@ -174,12 +176,20 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
         {
             case Kind::previous:  selectNeighbourLocked (-1); break;
             case Kind::next:      selectNeighbourLocked (1); break;
-            case Kind::typeMenu:
-                state.panelPopup = popupBefore == PanelPopup::types ? PanelPopup::none : PanelPopup::types;
+            case Kind::bandList:  toggle (PanelPopup::bands); break;
+            case Kind::bandItem:
+            {
+                std::array<const Band*, maxBands> order;
+                if (target.index < bandsByFrequency (state.bands, order))
+                    state.selected = order[(size_t) target.index]->id;
+                state.panelPopup = PanelPopup::none;
                 break;
+            }
+            case Kind::typeMenu:  toggle (PanelPopup::types); break;
+            case Kind::stereoMenu: toggle (PanelPopup::stereo); break;
             case Kind::dynamicsMenu:
                 if (! band->isCut())
-                    state.panelPopup = popupBefore == PanelPopup::dynamics ? PanelPopup::none : PanelPopup::dynamics;
+                    toggle (PanelPopup::dynamics);
                 break;
             case Kind::type:
                 band->type = (FilterType) target.index;
@@ -196,9 +206,19 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                     changed = true;
                 }
                 break;
-            case Kind::stereo:
-                changed = band->stereo != (target.index == 1);
-                band->stereo = target.index == 1;
+            case Kind::stereoItem:
+                applyStereoChoice (*band, target.index);
+                state.panelPopup = PanelPopup::none;
+                changed = true;
+                break;
+            case Kind::positionSlider:
+                // Anywhere along it: the band goes mono, at that position, and
+                // follows the pointer until it's let go.
+                positionDrag = true;
+                band->stereo = false;
+                setKnobPosition (*band, posKnob, positionSliderFraction (e.position));
+                changed = true;
+                updateCursorLocked();
                 break;
             case Kind::solo:      state.soloLatched = state.soloLatched == band->id ? -1 : band->id; break;
             case Kind::mute:      band->muted = ! band->muted; changed = true; break;
@@ -206,6 +226,12 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 state.bands.remove (band->id);
                 validateSelectionLocked();
                 changed = true;
+                break;
+            case Kind::close:
+                // As a click on empty space: the panel goes away until a band is picked.
+                state.selected = -1;
+                state.panelHidden = true;
+                state.panelPopup = PanelPopup::none;
                 break;
             case Kind::knob:
                 if (knobEnabled (*band, target.index))
@@ -242,7 +268,16 @@ bool SphereView::panelPointerMoved (const juce::MouseEvent& e)
     {
         const std::lock_guard lock (stateLock);
 
-        if (! knobDrag.has_value())
+        if (positionDrag)
+        {
+            state.lastInteraction = nowSeconds();
+            auto* band = state.bands.find (state.selected);
+            if (band == nullptr)
+                return true;
+            setKnobPosition (*band, posKnob, positionSliderFraction (e.position));
+            edited = state.bands;
+        }
+        else if (! knobDrag.has_value())
         {
             if (pressed.has_value() || gainDrag.has_value() || panPosition.has_value() || state.rotating || state.dragged >= 0)
             {
@@ -263,25 +298,28 @@ bool SphereView::panelPointerMoved (const juce::MouseEvent& e)
             return true;
         }
 
-        state.lastInteraction = nowSeconds();
-        auto* band = state.bands.find (state.selected);
-
-        if (band == nullptr)
+        else
         {
-            knobDrag.reset();
-            return true;
+            state.lastInteraction = nowSeconds();
+            auto* band = state.bands.find (state.selected);
+
+            if (band == nullptr)
+            {
+                knobDrag.reset();
+                return true;
+            }
+
+            // Pressed on its value, it waits for a real drag: a click there types one.
+            knobDrag->moved = knobDrag->moved || std::abs (e.position.y - knobDrag->startY) > valueClickTravel;
+            if (knobDrag->fromValue && ! knobDrag->moved)
+                return true;
+
+            const float speed = (e.mods.isShiftDown() ? knobFineFactor : 1.0f) / knobPixelsFullRange;
+            knobDrag->position = std::clamp (knobDrag->position + (knobDrag->lastY - e.position.y) * speed, 0.0f, 1.0f);
+            knobDrag->lastY = e.position.y;
+            setKnobPosition (*band, knobDrag->knob, knobDrag->position);
+            edited = state.bands;
         }
-
-        // Pressed on its value, it waits for a real drag: a click there types one.
-        knobDrag->moved = knobDrag->moved || std::abs (e.position.y - knobDrag->startY) > valueClickTravel;
-        if (knobDrag->fromValue && ! knobDrag->moved)
-            return true;
-
-        const float speed = (e.mods.isShiftDown() ? knobFineFactor : 1.0f) / knobPixelsFullRange;
-        knobDrag->position = std::clamp (knobDrag->position + (knobDrag->lastY - e.position.y) * speed, 0.0f, 1.0f);
-        knobDrag->lastY = e.position.y;
-        setKnobPosition (*band, knobDrag->knob, knobDrag->position);
-        edited = state.bands;
     }
 
     notifyBandsEdited (edited);
@@ -301,10 +339,17 @@ bool SphereView::panelDoubleClick (const juce::MouseEvent& e)
 
         auto* band = state.bands.find (state.selected);
 
-        if (target.kind != PanelTarget::Kind::knob || band == nullptr || ! knobEnabled (*band, target.index))
-            return true;
+        if (band != nullptr && target.kind == PanelTarget::Kind::positionSlider)
+        {
+            applyStereoChoice (*band, stereoMid);
+        }
+        else
+        {
+            if (target.kind != PanelTarget::Kind::knob || band == nullptr || ! knobEnabled (*band, target.index))
+                return true;
 
-        resetKnob (*band, target.index);
+            resetKnob (*band, target.index);
+        }
         edited = state.bands;
     }
 
@@ -324,14 +369,16 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
             return false;
 
         auto* band = state.bands.find (state.selected);
+        const int knob = target.kind == PanelTarget::Kind::positionSlider ? posKnob : target.index;
 
-        if (target.kind != PanelTarget::Kind::knob || band == nullptr || ! knobEnabled (*band, target.index))
+        if ((target.kind != PanelTarget::Kind::knob && target.kind != PanelTarget::Kind::positionSlider)
+            || band == nullptr || ! knobEnabled (*band, knob))
             return true;
 
         state.lastInteraction = nowSeconds();
         float change;
 
-        if (knobIsStepped (*band, target.index))
+        if (knobIsStepped (*band, knob))
         {
             // One step per notch; small trackpad deltas add up.
             slopeAccumulator += delta;
@@ -344,7 +391,7 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
             change = -delta / 100.0f / 120.0f * (e.mods.isShiftDown() ? knobFineFactor : 1.0f);
         }
 
-        setKnobPosition (*band, target.index, knobPosition (*band, target.index) + change);
+        setKnobPosition (*band, knob, knobPosition (*band, knob) + change);
         edited = state.bands;
     }
 
@@ -679,6 +726,7 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
     gainDrag.reset();
     panPosition.reset();
     knobDrag.reset();
+    positionDrag = false;
     pressed.reset();
     state.lastInteraction = now;
     state.helpHovered = overHelpButton (e.position);
@@ -904,9 +952,10 @@ void SphereView::beginValueEdit (int knob, int trim)
         {
             // The panel may have moved on since the click.
             const auto* band = state.bands.find (state.selected);
-            const bool inPopup = knob == ratioKnob || knob == attackKnob || knob == releaseKnob;
+            const bool inDynamics = knob == ratioKnob || knob == attackKnob || knob == releaseKnob;
             if (band == nullptr || ! state.panelOpen || state.panelHidden || ! knobEnabled (*band, knob)
-                || (inPopup && state.panelPopup != PanelPopup::dynamics))
+                || (inDynamics && state.panelPopup != PanelPopup::dynamics)
+                || (knob == posKnob && state.panelPopup != PanelPopup::stereo))
                 return;
             text = knobValueText (*band, knob);
         }

@@ -258,7 +258,7 @@ void SphereView::drawLabel (juce::Graphics& g, const Band& b, Vec3 s, const Came
 
     if (b.isCut())
     {
-        lines.add ((b.type == FilterType::lowCut ? "Low cut  " : "High cut  ") + freq);
+        lines.add ((b.type == FilterType::lowCut ? "High pass  " : "Low pass  ") + freq);
         lines.add (juce::String (b.slope) + " dB/oct  " + dot + "  " + (b.stereo ? juce::String ("Stereo") : panLabel (b.lon)));
     }
     else

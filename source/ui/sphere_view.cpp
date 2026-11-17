@@ -314,8 +314,15 @@ void SphereView::selectNeighbourLocked (int direction)
 
 PanelTarget SphereView::panelTargetLocked (juce::Point<float> position) const
 {
-    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPopup);
+    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPopup, state.bands.count);
     return layout.hit (position, state.panelOpen, state.bands.find (state.selected));
+}
+
+float SphereView::positionSliderFraction (juce::Point<float> position) const
+{
+    const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), 1.0f, PanelPopup::stereo);
+    const auto slider = layout.positionSlider;
+    return std::clamp ((position.x / layout.scale - slider.getX()) / slider.getWidth(), 0.0f, 1.0f);
 }
 
 PresetBarLayout SphereView::presetLayoutLocked() const
@@ -329,6 +336,8 @@ void SphereView::updateCursorLocked()
 
     if (knobDrag.has_value() || trimDragY.has_value())
         setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    else if (positionDrag || state.panelHover.kind == Kind::positionSlider)
+        setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
     else if (state.presetHover.kind == PresetTarget::Kind::menuBackground)
         setMouseCursor (juce::MouseCursor::NormalCursor);
     else if (state.presetHover.kind != PresetTarget::Kind::none)
@@ -577,8 +586,8 @@ void SphereView::renderOpenGL()
         drawOverlay (g, bands, camera, hovered, dragged, selected, dt);
         drawTitle (g, camera, soloed);
         drawBottomBar (g, camera, trimHot, trackName, trackColour, valueEdit);
-        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup), dpr, panelAmount,
-                       bands.find (selected), soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb,
+        drawBandPanel (g, BandPanelLayout::make (camera.width / dpr, camera.height / dpr, panelAmount, panelPopup, bands.count), dpr, panelAmount,
+                       bands, selected, soloed >= 0 && soloed == selected, panelHover, activeKnob, live.hasSidechain, selectedLevelDb,
                        valueEdit.has_value() && valueEdit->knob >= 0 ? &*valueEdit : nullptr);
         drawLevelMeter (g, camera, dt);
         drawHelp (g, camera, helpHovered, dt);

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3DQ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <canvas id="sphere" aria-hidden="true"></canvas>
+
+    <header class="topbar">
+      <span class="logo">3DQ</span>
+      <span class="preset">Default</span>
+    </header>
+
+    <div class="dock" id="dock">
+      <section class="panel" id="panel" aria-label="Band controls"></section>
+    </div>
+
+    <footer class="bottombar">
+      <button class="trim" data-trim="in" title="Input gain: drag, scroll, or click to type"><span class="trim-label">IN</span><span class="trim-value"></span></button>
+      <span class="track"><i class="track-dot"></i><span class="track-name"></span></span>
+      <button class="trim" data-trim="out" title="Output gain: drag, scroll, or click to type"><span class="trim-label">OUT</span><span class="trim-value"></span></button>
+    </footer>
+  </main>
+
+  <script src="model.js"></script>
+  <script src="sphere.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

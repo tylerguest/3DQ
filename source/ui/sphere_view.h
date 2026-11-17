@@ -17,7 +17,7 @@
       Alt+scroll on node      dynamic range
       Ctrl/Cmd+scroll on node threshold
       double-click a node     remove it
-      Shift+double-click      cycle peak -> low cut -> high cut -> low shelf -> high shelf
+      Shift+double-click      cycle peak -> high pass -> low pass -> low shelf -> high shelf
       right-click a node      mute
       Shift+right-click node  stereo / mono (both channels, or its one stereo position)
       click a value           type a new one (Return sets it, Escape doesn't)
@@ -199,6 +199,8 @@ private:
     int trimTargetLocked (juce::Point<float> position) const;
     // Closes the band panel's open menu, if any. Returns whether one was open.
     bool dismissPanelPopupLocked();
+    // Where along the stereo menu's position slider a point is, 0..1.
+    float positionSliderFraction (juce::Point<float> position) const;
     void editTrimGain (int which, float db, bool wholeGesture);
 
     // Typing a value: a click on a band knob's value (knob) or a gain field
@@ -271,6 +273,7 @@ private:
     std::optional<GainDrag> gainDrag;
     std::optional<juce::Point<float>> panPosition; // last pointer position while panning
     std::optional<KnobDrag> knobDrag;
+    bool positionDrag = false; // dragging along the stereo menu's position slider
     std::optional<float> trimDragY; // last pointer y while dragging a gain field
     int trimDragWhich = 0;
     float trimDragDb = 0, trimDragStartY = 0;

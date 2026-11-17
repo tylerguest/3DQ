@@ -14,20 +14,29 @@ namespace threedq
 
 namespace
 {
-constexpr float panelHeight = 118.0f;
-// The panel's outline follows its controls: lower along the sides, rising in
-// a rounded crown over the Gain ring.
-constexpr float sideTopInset = 30.0f, crownTopInset = 2.0f;
-constexpr float sideColumnWidth = 72.0f;   // the band and type on the left; stereo and solo / mute / remove on the right
-constexpr float sideKnobSpacing = 76.0f;   // from Gain's centre to Freq's and Q's
+constexpr float panelHeight = 124.0f;
+constexpr float maxPanelWidth = 456.0f;
+// The body's top edge. Gain sits on its own raised disc, the housing, which
+// overlaps that edge: its top quarter stands out above the panel.
+constexpr float bodyTop = 36.0f;
+constexpr float housingRadius = 51.0f;
+constexpr float gainY = 52.0f;             // Gain's centre, from the panel's top
+constexpr float sideKnobY = 76.0f, sideKnobSpacing = 76.0f; // Freq's and Q's centres, from Gain's: clear of its well
+constexpr float labelY = 102.0f, labelHeight = 16.0f;       // every knob's name or value, on one line
+constexpr float toolY = 45.0f, toolSize = 22.0f, toolGap = 5.0f; // the corner buttons
+constexpr float pillY = 84.0f, pillHeight = 26.0f;
+constexpr float edgeInset = 12.0f;
 constexpr float panelBottomInset = bottomBarHeight + 14.0f; // floating clear of the bar
-constexpr float panelViewGap = 10.0f;      // between the sphere's room and the panel's crown
+constexpr float panelViewGap = 10.0f;      // between the sphere's room and Gain's housing
 constexpr float panelFitMargin = 10.0f;    // kept clear above and below the sphere when it is fitted
-constexpr float gainKnobRadius = 22.0f;
-constexpr float ringRadius = 36.0f, ringWidth = 5.0f;           // the range ring round Gain
-constexpr float thresholdRadius = 28.5f, thresholdWidth = 3.0f; // the threshold ring, inside it
-constexpr float sideKnobRadius = 17.0f;
-constexpr float popupKnobRadius = 12.0f; // ratio, attack and release
+constexpr float gainKnobRadius = 30.0f;
+constexpr float thresholdRadius = 36.5f, thresholdWidth = 5.0f; // the inner ring round Gain
+constexpr float rangeRadius = 44.5f, rangeWidth = 6.0f;         // the outer one
+constexpr float ringSplit = 40.5f;         // where the threshold ring's grab area ends and the range's starts
+constexpr float wellRadius = 49.0f;        // the dark well both rings sit in
+constexpr float sideKnobRadius = 22.0f;
+constexpr float popupKnobRadius = 18.0f;   // ratio, attack and release
+constexpr float menuItemHeight = 26.0f, menuPad = 5.0f, menuGap = 6.0f, shoulderGap = 8.0f, separatorHeight = 11.0f;
 constexpr float knobStartAngle = -2.35619f; // 12 o'clock is 0, clockwise
 constexpr float knobSweep = 4.71239f;
 
@@ -146,8 +155,14 @@ juce::Path typeGlyph (int type, juce::Point<float> c)
 
 const char* typeName (int type)
 {
-    static constexpr std::array<const char*, numFilterTypes> names { "Peak", "Low cut", "High cut", "Low shelf", "High shelf" };
+    static constexpr std::array<const char*, numFilterTypes> names { "Peak", "High pass", "Low pass", "Low shelf", "High shelf" };
     return names[(size_t) type];
+}
+
+const char* stereoChoiceName (int choice)
+{
+    static constexpr std::array<const char*, numStereoChoices> names { "Stereo (both channels)", "Mid", "Side", "Left", "Right" };
+    return names[(size_t) choice];
 }
 
 void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
@@ -155,107 +170,170 @@ void strokeRounded (juce::Graphics& g, const juce::Path& p, float thickness)
     g.strokePath (p, juce::PathStrokeType (thickness, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
-// The panel's outline, contoured to its controls (see sideTopInset): low
-// shoulders over the side columns, and over Gain one soft wave, each side a
-// single S-curve up to a short level top.
-juce::Path panelOutline (juce::Rectangle<float> panel)
+// The panel's body: a plain rounded rectangle below the top edge.
+juce::Path panelBody (juce::Rectangle<float> panel)
 {
-    constexpr float corner = 12.0f;
-    const float l = panel.getX(), r = panel.getRight(), cx = panel.getCentreX();
-    const float top = panel.getY() + sideTopInset, crown = panel.getY() + crownTopInset;
-    const float bottom = panel.getBottom();
-
     juce::Path p;
-    p.startNewSubPath (l + corner, top);
-    p.lineTo (cx - 140.0f, top);
-    p.cubicTo (cx - 96.0f, top, cx - 84.0f, crown, cx - 40.0f, crown);
-    p.lineTo (cx + 40.0f, crown);
-    p.cubicTo (cx + 84.0f, crown, cx + 96.0f, top, cx + 140.0f, top);
-    p.lineTo (r - corner, top);
-    p.quadraticTo (r, top, r, top + corner);
-    p.lineTo (r, bottom - corner);
-    p.quadraticTo (r, bottom, r - corner, bottom);
-    p.lineTo (l + corner, bottom);
-    p.quadraticTo (l, bottom, l, bottom - corner);
-    p.lineTo (l, top + corner);
-    p.quadraticTo (l, top, l + corner, top);
-    p.closeSubPath();
+    p.addRoundedRectangle (panel.withTop (panel.getY() + bodyTop), 12.0f);
     return p;
 }
 
-// A surface: a dark graphite body, a shade lighter at the top, and an edge
-// that's just there: a faint line of light along the top, fading away down
-// the sides.
-void glass (juce::Graphics& g, const juce::Path& shape, juce::Rectangle<float> area, float alpha, float bodyAlpha)
+// Gain's housing: a disc over the body's top edge.
+juce::Rectangle<float> housingArea (juce::Rectangle<float> panel)
 {
-    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (33, 33, 32).withAlpha (bodyAlpha * alpha), area.getY(),
-                                                       juce::Colour (21, 21, 20).withAlpha (bodyAlpha * alpha), area.getBottom()));
-    g.fillPath (shape);
+    return juce::Rectangle<float> (2.0f * housingRadius, 2.0f * housingRadius).withCentre ({ panel.getCentreX(), panel.getY() + gainY });
+}
 
-    g.setGradientFill (juce::ColourGradient::vertical (textColour.withAlpha (0.13f * alpha), area.getY(),
-                                                       textColour.withAlpha (0.03f * alpha), area.getY() + 40.0f));
+// Everything the panel covers, for hit-testing: the body and the housing.
+juce::Path panelOutline (juce::Rectangle<float> panel)
+{
+    auto p = panelBody (panel);
+    p.addEllipse (housingArea (panel));
+    return p;
+}
+
+// A surface: a matte graphite body, barely lighter at the top, edged with a
+// fine neutral line.
+void surface (juce::Graphics& g, const juce::Path& shape, juce::Rectangle<float> area, float alpha)
+{
+    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (37, 37, 35).withAlpha (alpha), area.getY(),
+                                                       juce::Colour (27, 27, 26).withAlpha (alpha), area.getBottom()));
+    g.fillPath (shape);
+    g.setColour (textColour.withAlpha (0.08f * alpha));
     g.strokePath (shape, juce::PathStrokeType (1.0f));
 }
 }
 
-BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount, PanelPopup popup)
+int bandsByFrequency (const BandSet& bands, std::array<const Band*, maxBands>& order)
+{
+    int count = 0;
+    for (const auto& b : bands)
+        order[(size_t) count++] = &b;
+    std::sort (order.begin(), order.begin() + count, [] (const Band* a, const Band* b) { return a->lat < b->lat; });
+    return count;
+}
+
+bool stereoChoiceIsOn (const Band& b, int choice)
+{
+    if (choice == stereoBoth)
+        return b.stereo;
+
+    const int degrees = (int) std::lround (b.lon * 180.0f / pi);
+    switch (choice)
+    {
+        case stereoMid:   return ! b.stereo && degrees == 0;
+        case stereoSide:  return ! b.stereo && std::abs (degrees) == 180;
+        case stereoLeft:  return ! b.stereo && degrees == -90;
+        default:          return ! b.stereo && degrees == 90;
+    }
+}
+
+void applyStereoChoice (Band& b, int choice)
+{
+    b.stereo = choice == stereoBoth;
+    switch (choice)
+    {
+        case stereoMid:   b.lon = 0; break;
+        case stereoSide:  b.lon = pi; break;
+        case stereoLeft:  b.lon = -halfPi; break;
+        case stereoRight: b.lon = halfPi; break;
+        default:          break; // both channels: the position stays for when it's mono again
+    }
+}
+
+BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, float openAmount, PanelPopup popup, int bandCount)
 {
     BandPanelLayout l;
     l.popup = popup;
+    l.bandCount = std::clamp (bandCount, 0, maxBands);
     l.scale = uiScale (windowWidth, windowHeight);
     const float width = windowWidth / l.scale, height = windowHeight / l.scale;
-    const float panelWidth = std::min (width - 8.0f, std::clamp (width - 96.0f, 364.0f, 430.0f));
+    const float panelWidth = std::min (width - 8.0f, maxPanelWidth);
     const float openTop = height - panelBottomInset - panelHeight;
     const float closedTop = height + 6.0f;
     const float top = closedTop + (openTop - closedTop) * openAmount;
-    const float left = (width - panelWidth) / 2.0f;
-    const float x = left + 12.0f, right = left + panelWidth - 12.0f;
+    const float left = (width - panelWidth) / 2.0f, cx = left + panelWidth / 2.0f;
+    const float x = left + edgeInset, right = left + panelWidth - edgeInset;
 
     l.panel = { left, top, panelWidth, panelHeight };
 
-    // Left column: the band picker, then the filter type.
-    // The side columns sit low, level with the knobs, under the panel's
-    // shoulders; the crown rises over Gain between them.
-    constexpr float row1 = 40.0f, row2 = 66.0f, row3 = 93.0f;
-    l.previous = { x, top + row1, 16.0f, 22.0f };
-    l.title = { x + 16.0f, top + row1, sideColumnWidth - 32.0f, 22.0f };
-    l.next = { x + sideColumnWidth - 16.0f, top + row1, 16.0f, 22.0f };
-    l.typePill = { x, top + row2, sideColumnWidth, 24.0f };
+    // Top left: on / off, solo, the dynamics.
+    l.power = { x, top + toolY, toolSize, toolSize };
+    l.solo = l.power.translated (toolSize + toolGap, 0.0f);
+    l.gear = l.solo.translated (toolSize + toolGap, 0.0f);
 
-    // Right column: solo, mute and remove, then stereo / mono and the position.
-    const float rx = right - sideColumnWidth;
-    l.solo = { rx + 6.0f, top + row1, 22.0f, 22.0f };
-    l.mute = { rx + 28.0f, top + row1, 22.0f, 22.0f };
-    l.remove = { rx + 50.0f, top + row1, 22.0f, 22.0f };
-    l.stereo = { rx, top + row2, sideColumnWidth, 24.0f };
-    l.positionPill = { rx, top + row3, sideColumnWidth, 20.0f };
+    // Top right: < number >, remove, close.
+    l.close = { right - toolSize, top + toolY, toolSize, toolSize };
+    l.remove = l.close.translated (-(toolSize + toolGap), 0.0f);
+    l.next = { l.remove.getX() - toolGap - 2.0f - 14.0f, top + toolY + 1.0f, 14.0f, 20.0f };
+    l.number = { l.next.getX() - 20.0f, l.next.getY(), 20.0f, 20.0f };
+    l.previous = { l.number.getX() - 14.0f, l.next.getY(), 14.0f, 20.0f };
 
-    // Centre: Freq, Gain inside its two dynamics rings, and Q. The gear sits
-    // off the rings' upper right.
-    const juce::Point<float> gain { left + panelWidth / 2.0f, top + 54.0f };
-    l.gainCentre = gain;
-    // Freq and Q sit a little lower, so their captions share Gain's line.
-    l.freqCentre = { gain.x - sideKnobSpacing, gain.y + 10.0f };
-    l.qCentre = { gain.x + sideKnobSpacing, gain.y + 10.0f };
-    l.gear = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ gain.x + 42.0f, gain.y - 34.0f });
+    // Bottom corners: the type and stereo menus, as wide as fits beside Freq and Q.
+    const float pillWidth = std::max (64.0f, panelWidth / 2.0f - sideKnobSpacing - sideKnobRadius - 8.0f - edgeInset);
+    l.typePill = { x, top + pillY, pillWidth, pillHeight };
+    l.stereoPill = { right - pillWidth, top + pillY, pillWidth, pillHeight };
 
-    // The menus open upwards, over the sphere, so the panel stays as it is.
+    l.gainCentre = { cx, top + gainY };
+    l.freqCentre = { cx - sideKnobSpacing, top + sideKnobY };
+    l.qCentre = { cx + sideKnobSpacing, top + sideKnobY };
+
+    // The menus open upwards, over the sphere: the type and stereo menus above
+    // their pills, the dynamics and the band list on the shoulders either side
+    // of Gain, pointing at the button that opened them.
+    const float shoulderBottom = top + bodyTop - shoulderGap;
+    const float housingReach = std::sqrt (housingRadius * housingRadius - juce::square (gainY - bodyTop + shoulderGap)); // its half-width there
+    const float shoulderWidth = panelWidth / 2.0f - housingReach - 4.0f;
     if (popup == PanelPopup::types)
     {
-        constexpr float itemHeight = 20.0f;
-        l.popupArea = { x, l.typePill.getY() - 6.0f - (itemHeight * numFilterTypes + 8.0f), sideColumnWidth + 20.0f, itemHeight * numFilterTypes + 8.0f };
+        const float h = menuItemHeight * numFilterTypes + 2.0f * menuPad;
+        l.popupArea = { x, l.typePill.getY() - menuGap - h, 150.0f, h };
         for (int i = 0; i < numFilterTypes; ++i)
-            l.typeItems[(size_t) i] = { l.popupArea.getX() + 4.0f, l.popupArea.getY() + 4.0f + itemHeight * (float) i, l.popupArea.getWidth() - 8.0f, itemHeight };
+            l.typeItems[(size_t) i] = { l.popupArea.getX() + menuPad, l.popupArea.getY() + menuPad + menuItemHeight * (float) i,
+                                        l.popupArea.getWidth() - 2.0f * menuPad, menuItemHeight };
+    }
+    else if (popup == PanelPopup::stereo)
+    {
+        constexpr float sliderRow = 30.0f, menuWidth = 196.0f;
+        const float h = 2.0f * menuPad + menuItemHeight * numStereoChoices + 2.0f * separatorHeight + sliderRow;
+        l.popupArea = { right - menuWidth, l.stereoPill.getY() - menuGap - h, menuWidth, h };
+        float y = l.popupArea.getY() + menuPad;
+        for (int i = 0; i < numStereoChoices; ++i)
+        {
+            l.stereoItems[(size_t) i] = { l.popupArea.getX() + menuPad, y, menuWidth - 2.0f * menuPad, menuItemHeight };
+            y += menuItemHeight + (i == stereoBoth ? separatorHeight : 0.0f);
+        }
+        y += separatorHeight;
+        l.positionValue = { l.popupArea.getRight() - 14.0f - 56.0f, y + 7.0f, 56.0f, 16.0f };
+        l.positionSlider = { l.popupArea.getX() + 14.0f, y + 7.0f, l.positionValue.getX() - 8.0f - (l.popupArea.getX() + 14.0f), 16.0f };
     }
     else if (popup == PanelPopup::dynamics)
     {
-        constexpr float knobWidth = 54.0f, menuWidth = 4.0f * knobWidth + 56.0f, menuHeight = 72.0f;
-        const float centreX = left + panelWidth / 2.0f; // centred over the panel
-        l.popupArea = { centreX - menuWidth / 2.0f, top - 8.0f - menuHeight, menuWidth, menuHeight };
+        constexpr float cell = 56.0f, row = 22.0f;
+        const float menuWidth = std::min (174.0f, shoulderWidth);
+        const float h = 9.0f + cell + 12.0f + row + 8.0f;
+        l.popupArea = { left, shoulderBottom - h, menuWidth, h };
+        const float cellWidth = (menuWidth - 16.0f) / 3.0f;
         for (int i = 0; i < 3; ++i)
-            l.dynamicsKnobs[(size_t) i] = { l.popupArea.getX() + 6.0f + knobWidth * (float) i, l.popupArea.getY() + 6.0f, knobWidth, menuHeight - 12.0f };
-        l.grMeter = { l.popupArea.getX() + 6.0f + knobWidth * 3.0f, l.popupArea.getY() + 6.0f, knobWidth, menuHeight - 12.0f };
-        l.sidechain = { l.popupArea.getRight() - 46.0f, l.popupArea.getY() + 16.0f, 38.0f, 22.0f };
+            l.dynamicsKnobs[(size_t) i] = { l.popupArea.getX() + 8.0f + cellWidth * (float) i, l.popupArea.getY() + 9.0f, cellWidth, cell };
+        const float rowY = l.popupArea.getY() + 9.0f + cell + 12.0f;
+        l.sidechain = { l.popupArea.getX() + 8.0f, rowY, 34.0f, row };
+        l.sidechainNote = { l.sidechain.getRight() + 7.0f, rowY, 52.0f, row };
+        const float meterX = l.sidechainNote.getRight() + 6.0f;
+        l.grMeter = { meterX, rowY + row / 2.0f - 2.5f, l.popupArea.getRight() - 8.0f - meterX, 5.0f };
+        l.arrowX = l.gear.getCentreX();
+    }
+    else if (popup == PanelPopup::bands)
+    {
+        const float menuWidth = std::min (186.0f, shoulderWidth);
+        const float room = shoulderBottom - (presetBarBottom + 6.0f) - 2.0f * menuPad;
+        const float rowHeight = l.bandCount > 0 ? std::clamp (room / (float) l.bandCount, 12.0f, menuItemHeight) : menuItemHeight;
+        const float h = 2.0f * menuPad + rowHeight * (float) std::max (1, l.bandCount);
+        l.popupArea = { left + panelWidth - menuWidth, shoulderBottom - h, menuWidth, h };
+        for (int i = 0; i < l.bandCount; ++i)
+            l.bandItems[(size_t) i] = { l.popupArea.getX() + menuPad, l.popupArea.getY() + menuPad + rowHeight * (float) i,
+                                        menuWidth - 2.0f * menuPad, rowHeight };
+        l.arrowX = l.number.getCentreX();
     }
 
     return l;
@@ -271,19 +349,40 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
 
     if (band != nullptr && popup != PanelPopup::none && popupArea.contains (p))
     {
-        if (popup == PanelPopup::types)
+        switch (popup)
         {
-            for (int i = 0; i < numFilterTypes; ++i)
-                if (typeItems[(size_t) i].contains (p))
-                    return { Kind::type, i, true };
-        }
-        else
-        {
-            for (int i = 0; i < 3; ++i)
-                if (dynamicsKnobs[(size_t) i].contains (p))
-                    return { Kind::knob, ratioKnob + i, true, valueArea (ratioKnob + i).contains (p) };
-            if (sidechain.contains (p))
-                return { Kind::sidechain, 0, true };
+            case PanelPopup::types:
+                for (int i = 0; i < numFilterTypes; ++i)
+                    if (typeItems[(size_t) i].contains (p))
+                        return { Kind::type, i, true };
+                break;
+
+            case PanelPopup::stereo:
+                for (int i = 0; i < numStereoChoices; ++i)
+                    if (stereoItems[(size_t) i].contains (p))
+                        return { Kind::stereoItem, i, true };
+                if (positionSlider.expanded (6.0f, 7.0f).contains (p))
+                    return { Kind::positionSlider, 0, true };
+                if (positionValue.expanded (0.0f, 7.0f).contains (p) && knobEnabled (*band, posKnob))
+                    return { Kind::knob, posKnob, true, true };
+                break;
+
+            case PanelPopup::dynamics:
+                for (int i = 0; i < 3; ++i)
+                    if (dynamicsKnobs[(size_t) i].contains (p))
+                        return { Kind::knob, ratioKnob + i, true, valueArea (ratioKnob + i).contains (p) };
+                if (sidechain.contains (p))
+                    return { Kind::sidechain, 0, true };
+                break;
+
+            case PanelPopup::bands:
+                for (int i = 0; i < bandCount; ++i)
+                    if (bandItems[(size_t) i].contains (p))
+                        return { Kind::bandItem, i, true };
+                break;
+
+            case PanelPopup::none:
+                break;
         }
 
         return { Kind::background, 0, true };
@@ -294,31 +393,31 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
 
     if (band != nullptr)
     {
-        if (previous.contains (p))    return { Kind::previous };
-        if (next.contains (p))        return { Kind::next };
-        if (typePill.contains (p))    return { Kind::typeMenu };
-        if (stereo.contains (p))      return { Kind::stereo, p.x >= stereo.getCentreX() ? 1 : 0 }; // 0 = Mono, 1 = Stereo
-        if (positionPill.contains (p) && knobEnabled (*band, posKnob)) return { Kind::knob, posKnob, false, true };
+        if (power.contains (p))       return { Kind::mute };
         if (solo.contains (p))        return { Kind::solo };
-        if (mute.contains (p))        return { Kind::mute };
-        if (remove.contains (p))      return { Kind::remove };
         if (gear.contains (p) && ! band->isCut()) return { Kind::dynamicsMenu };
+        if (previous.contains (p))    return { Kind::previous };
+        if (number.contains (p))      return { Kind::bandList };
+        if (next.contains (p))        return { Kind::next };
+        if (remove.contains (p))      return { Kind::remove };
+        if (close.contains (p))       return { Kind::close };
+        if (typePill.contains (p))    return { Kind::typeMenu };
+        if (stereoPill.contains (p))  return { Kind::stereoMenu };
 
         for (int knob : { freqKnob, gainKnob, qKnob })
             if (valueArea (knob).contains (p) && knobEnabled (*band, knob))
                 return { Kind::knob, knob, false, true };
 
         const float fromGain = p.getDistanceFrom (gainCentre);
-        if (fromGain <= gainKnobRadius + 1.0f)
+        if (fromGain <= gainKnobRadius + 1.5f)
             return { Kind::knob, gainKnob };
-        if (fromGain <= (thresholdRadius + ringRadius) / 2.0f)
+        if (fromGain <= ringSplit)
             return { Kind::knob, thresholdKnob };
-        if (fromGain <= ringRadius + 6.0f)
+        if (fromGain <= wellRadius)
             return { Kind::knob, rangeKnob };
 
-        // A side knob takes its label and value too.
         for (const auto [centre, knob] : { std::pair { freqCentre, freqKnob }, std::pair { qCentre, qKnob } })
-            if (juce::Rectangle<float> (60.0f, 70.0f).withCentre ({ centre.x, centre.y + 12.0f }).contains (p))
+            if (p.getDistanceFrom (centre) <= sideKnobRadius + 4.0f)
                 return { Kind::knob, knob };
     }
 
@@ -327,19 +426,20 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const 
 
 juce::Rectangle<float> BandPanelLayout::valueArea (int knob) const
 {
-    // Matches where drawBandPanel writes each value.
+    // Matches where drawBandPanel writes each name and value.
+    const float y = panel.getY() + labelY;
     switch (knob)
     {
-        case freqKnob:  return { freqCentre.x - 30.0f, freqCentre.y + 33.0f, 60.0f, 14.0f };
-        case qKnob:     return { qCentre.x - 30.0f, qCentre.y + 33.0f, 60.0f, 14.0f };
-        case gainKnob:  return { gainCentre.x - 30.0f, gainCentre.y + 43.0f, 60.0f, 14.0f };
-        case posKnob:   return positionPill;
+        case freqKnob:  return { freqCentre.x - 36.0f, y, 72.0f, labelHeight };
+        case qKnob:     return { qCentre.x - 36.0f, y, 72.0f, labelHeight };
+        case gainKnob:  return { gainCentre.x - 40.0f, y, 80.0f, labelHeight };
+        case posKnob:   return positionValue;
         case ratioKnob:
         case attackKnob:
         case releaseKnob:
         {
             const auto area = dynamicsKnobs[(size_t) (knob - ratioKnob)];
-            return { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f };
+            return { area.getX(), area.getY() + 2.0f * popupKnobRadius + 4.0f, area.getWidth(), labelHeight };
         }
         default:        return {};
     }
@@ -576,57 +676,127 @@ bool setKnobFromText (Band& b, int knob, const juce::String& text)
 
 namespace
 {
-// A knob: a dark disc with a thin arc just inside its edge for the value (from
-// the middle when bipolar) and a short tick where it ends. Without track
-// there's no arc: Gain's rings stand in for it. position runs 0..1.
-void drawKnob (juce::Graphics& g, juce::Point<float> c, float radius, float position, bool bipolar, bool lit, bool showValue,
-               float alpha, bool track)
+// A knob: a matte disc with a thin arc just inside its edge for the value
+// (from the middle when bipolar) and a dot where it ends. Without track
+// there's no arc, only a tick: Gain's rings stand in for it. position runs 0..1.
+void drawKnob (juce::Graphics& g, juce::Point<float> c, float radius, float position, bool bipolar, bool lit, bool enabled,
+               float alpha, bool track, juce::Colour arcColour)
 {
-    const auto bright = textColour;
     const float angle = knobStartAngle + std::clamp (position, 0.0f, 1.0f) * knobSweep;
     const float anchor = bipolar ? knobStartAngle + 0.5f * knobSweep : knobStartAngle;
-    const bool small = radius <= 12.0f;
     const float body = radius - 0.5f;
-    const float arcRadius = body - (small ? 2.5f : 3.5f), stroke = small ? 1.5f : 2.0f;
+    const float arcRadius = body - (radius < 20.0f ? 3.5f : 4.0f), stroke = 2.0f;
     const auto bodyArea = juce::Rectangle<float> (body * 2.0f, body * 2.0f).withCentre (c);
 
-    juce::Path cap;
-    cap.addEllipse (bodyArea);
-    g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (40, 40, 39).brighter (lit ? 0.12f : 0.0f).withMultipliedAlpha (alpha), bodyArea.getY(),
-                                                       juce::Colour (22, 22, 21).withMultipliedAlpha (alpha), bodyArea.getBottom()));
-    g.fillPath (cap);
-    g.setColour (juce::Colours::black.withAlpha (0.6f * alpha));
-    g.strokePath (cap, juce::PathStrokeType (1.2f));
-    g.setColour (textColour.withAlpha ((lit ? 0.16f : 0.08f) * alpha));
-    strokeRounded (g, arc (c.x, c.y, body - 0.8f, -1.2f, 1.2f), 0.8f); // light catching the top edge
+    // A soft shadow under it, the face lit from above, and a fine rim.
+    g.setColour (juce::Colours::black.withAlpha (0.55f * alpha));
+    g.fillEllipse (bodyArea.translated (0.0f, 1.5f).expanded (0.5f));
+    juce::ColourGradient face (juce::Colour (58, 57, 52).brighter (lit ? 0.12f : 0.0f).withMultipliedAlpha (alpha), c.x, c.y - body * 0.75f,
+                               juce::Colour (24, 24, 22).withMultipliedAlpha (alpha), c.x, c.y + body, true);
+    face.addColour (0.6, juce::Colour (36, 35, 31).withMultipliedAlpha (alpha));
+    g.setGradientFill (face);
+    g.fillEllipse (bodyArea);
+    g.setGradientFill (juce::ColourGradient::vertical (textColour.withAlpha ((lit ? 0.2f : 0.14f) * alpha), bodyArea.getY(),
+                                                       textColour.withAlpha (0.02f * alpha), bodyArea.getBottom()));
+    g.drawEllipse (bodyArea.reduced (0.5f), 1.0f);
 
     if (track)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.35f * alpha));
-        strokeRounded (g, arc (c.x, c.y, arcRadius, knobStartAngle, knobStartAngle + knobSweep), stroke);
-
-        if (showValue && std::abs (angle - anchor) > 0.01f)
-        {
-            g.setColour (bright.withAlpha ((lit ? 1.0f : 0.85f) * alpha));
-            strokeRounded (g, arc (c.x, c.y, arcRadius, std::min (anchor, angle), std::max (anchor, angle)), stroke);
-        }
+        g.setColour (juce::Colours::black.withAlpha (0.4f * alpha));
+        strokeRounded (g, arc (c.x, c.y, arcRadius, knobStartAngle, knobStartAngle + knobSweep), stroke + 1.0f);
     }
 
-    juce::Path tick;
-    const float inner = track ? arcRadius - (small ? 4.0f : 6.0f) : body * 0.45f;
-    const float outer = track ? arcRadius - stroke : body - 4.0f;
-    tick.startNewSubPath (c.x + std::sin (angle) * inner, c.y - std::cos (angle) * inner);
-    tick.lineTo (c.x + std::sin (angle) * outer, c.y - std::cos (angle) * outer);
-    g.setColour (bright.withMultipliedAlpha (alpha));
-    strokeRounded (g, tick, small ? 1.4f : 1.8f);
+    if (track && enabled && std::abs (angle - anchor) > 0.01f)
+    {
+        g.setColour (arcColour.withMultipliedAlpha (alpha));
+        strokeRounded (g, arc (c.x, c.y, arcRadius, std::min (anchor, angle), std::max (anchor, angle)), stroke);
+    }
+
+    const auto at = [&c, angle] (float r) { return juce::Point<float> (c.x + std::sin (angle) * r, c.y - std::cos (angle) * r); };
+    g.setColour (pale.withMultipliedAlpha (alpha));
+    if (track)
+    {
+        const auto dot = at (arcRadius - 6.0f);
+        g.fillEllipse (juce::Rectangle<float> (3.2f, 3.2f).withCentre (dot));
+    }
+    else
+    {
+        juce::Path tick;
+        tick.startNewSubPath (at (body * 0.5f));
+        tick.lineTo (at (body - 5.0f));
+        strokeRounded (g, tick, 2.0f);
+    }
+}
+
+juce::Path powerIcon (juce::Point<float> c)
+{
+    juce::Path p;
+    p.addCentredArc (c.x, c.y + 0.6f, 4.2f, 4.2f, 0.0f, 0.7f, 2.0f * pi - 0.7f, true);
+    p.startNewSubPath (c.x, c.y - 4.6f);
+    p.lineTo (c.x, c.y - 0.2f);
+    return p;
+}
+
+juce::Path gearIcon (juce::Point<float> c)
+{
+    juce::Path p;
+    p.addEllipse (c.x - 2.4f, c.y - 2.4f, 4.8f, 4.8f);
+    for (int i = 0; i < 8; ++i)
+    {
+        const float a = (float) i * pi / 4.0f;
+        p.startNewSubPath (c.x + std::cos (a) * 3.9f, c.y + std::sin (a) * 3.9f);
+        p.lineTo (c.x + std::cos (a) * 5.4f, c.y + std::sin (a) * 5.4f);
+    }
+    return p;
+}
+
+juce::Path binIcon (juce::Point<float> c)
+{
+    const auto at = [c] (float x, float y) { return juce::Point<float> (c.x + x - 6.0f, c.y + y - 6.0f); };
+    juce::Path p;
+    p.startNewSubPath (at (2.2f, 3.4f));
+    p.lineTo (at (9.8f, 3.4f));
+    p.startNewSubPath (at (4.6f, 3.4f));
+    p.lineTo (at (4.6f, 2.0f));
+    p.lineTo (at (7.4f, 2.0f));
+    p.lineTo (at (7.4f, 3.4f));
+    p.startNewSubPath (at (3.4f, 3.4f));
+    p.lineTo (at (4.0f, 10.2f));
+    p.lineTo (at (8.0f, 10.2f));
+    p.lineTo (at (8.6f, 3.4f));
+    return p;
+}
+
+juce::Path crossIcon (juce::Point<float> c, float half)
+{
+    juce::Path p;
+    p.startNewSubPath (c.x - half, c.y - half);
+    p.lineTo (c.x + half, c.y + half);
+    p.startNewSubPath (c.x + half, c.y - half);
+    p.lineTo (c.x - half, c.y + half);
+    return p;
+}
+
+juce::Path chevron (juce::Point<float> c, float direction, float size)
+{
+    juce::Path p;
+    p.startNewSubPath (c.x - direction * size * 0.5f, c.y - size);
+    p.lineTo (c.x + direction * size * 0.5f, c.y);
+    p.lineTo (c.x - direction * size * 0.5f, c.y + size);
+    return p;
 }
 } // namespace
 
 void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, float amount,
-                    const Band* band, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
+                    const BandSet& bands, int selected, bool soloed, PanelTarget hover, int activeKnob, bool sidechainConnected,
                     float levelDb, const ValueEdit* edit)
 {
     using Kind = PanelTarget::Kind;
+
+    if (amount <= 0.01f)
+        return;
+
+    const auto* band = bands.find (selected);
     const auto editing = [edit] (int knob) { return edit != nullptr && edit->knob == knob; };
     const auto entry = [&] (juce::Rectangle<float> area) { drawValueEntry (g, area, edit->text, edit->allSelected, 10.5f, 1.0f); };
 
@@ -634,361 +804,442 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
     g.addTransform (juce::AffineTransform::scale (dpr * l.scale));
 
     const auto faded = [amount] (juce::Colour c) { return c.withMultipliedAlpha (amount); };
-    const auto text = [&] (const juce::String& s, juce::Rectangle<float> area, float size, juce::Colour c, bool bold = false)
+    const auto idle = textColour.withAlpha (0.6f), bright = textColour, faint = textColour.withAlpha (0.38f);
+    const auto text = [&] (const juce::String& s, juce::Rectangle<float> area, float size, juce::Colour c,
+                           juce::Justification j = juce::Justification::centred, bool bold = false)
     {
         g.setFont (uiFont (size, bold));
-        g.setColour (c);
-        g.drawText (s, area, juce::Justification::centred, false);
+        g.setColour (faded (c));
+        g.drawText (s, area, j, true);
     };
-    // A control's name, in plain capitals.
-    const auto caption = [&] (const juce::String& s, juce::Rectangle<float> area, juce::Colour c)
+    const auto stroke = [&] (const juce::Path& p, juce::Colour c, float thickness)
     {
-        g.setFont (uiFont (9.5f).withExtraKerningFactor (0.05f));
-        g.setColour (c.withMultipliedAlpha (0.95f));
-        g.drawText (s, area, juce::Justification::centred, false);
+        g.setColour (faded (c));
+        strokeRounded (g, p, thickness);
     };
-    const auto buttonBack = [&] (juce::Rectangle<float> area, bool active, bool hovered)
+    // A button: bare, with a soft fill only while hovered.
+    const auto toolBack = [&] (juce::Rectangle<float> area, bool hovered)
     {
-        if (! active && ! hovered)
-            return;
-        g.setColour (faded (textColour.withAlpha (active ? 0.18f : 0.08f)));
-        g.fillRoundedRectangle (area.reduced (1.0f), 4.0f);
+        if (hovered)
+        {
+            g.setColour (faded (textColour.withAlpha (0.08f)));
+            g.fillRoundedRectangle (area, 6.0f);
+        }
     };
-    // A pill: a flat, lighter patch to click or drag, no outline; lighter
-    // still when hovered or switched on.
-    const auto pill = [&] (juce::Rectangle<float> area, bool active, bool hovered)
+    // A menu or switch: a faint flat patch, no edge, lighter when hovered or open.
+    const auto patch = [&] (juce::Rectangle<float> area, float corner, bool hovered)
     {
-        g.setColour (faded (textColour.withAlpha (active ? 0.13f : hovered ? 0.09f : 0.055f)));
-        g.fillRoundedRectangle (area, 6.0f);
+        g.setColour (faded (textColour.withAlpha (hovered ? 0.08f : 0.035f)));
+        g.fillRoundedRectangle (area, corner);
     };
-    const auto popupBack = [&] (juce::Rectangle<float> area)
+    const auto popupBack = [&] (juce::Rectangle<float> area, bool pointer)
     {
         juce::Path shape;
         shape.addRoundedRectangle (area, 10.0f);
-        glass (g, shape, area, amount, 0.94f);
-    };
-
-    if (amount > 0.01f)
-    {
-        // The panel: nearly solid, the sphere only just showing through.
-        glass (g, panelOutline (l.panel), l.panel, amount, 0.84f);
-
-        if (band == nullptr)
+        g.setColour (faded (juce::Colours::black.withAlpha (0.45f)));
+        g.fillRoundedRectangle (area.translated (0.0f, 6.0f).expanded (2.0f), 12.0f);
+        if (pointer)
         {
-            text ("Double-click the sphere to add a band", l.panel, 12.0f, faded (textColour.withAlpha (0.6f)));
+            // A point down to the button that opened it.
+            juce::Path tip;
+            tip.addTriangle (l.arrowX - 6.0f, area.getBottom() - 1.0f, l.arrowX + 6.0f, area.getBottom() - 1.0f, l.arrowX, area.getBottom() + 6.0f);
+            shape.addPath (tip);
+        }
+        surface (g, shape, area, amount);
+    };
+    const auto menuItem = [&] (juce::Rectangle<float> area, bool hovered)
+    {
+        if (hovered)
+        {
+            g.setColour (faded (textColour.withAlpha (0.085f)));
+            g.fillRoundedRectangle (area, 6.0f);
+        }
+    };
+    // A knob's name, or its value while hovered or turned: then on a dark chip.
+    const auto label = [&] (juce::Rectangle<float> area, const juce::String& name, const juce::String& value, bool showing, bool enabled, float size = 9.5f)
+    {
+        if (showing && enabled)
+        {
+            const auto font = uiFont (10.5f);
+            const float w = juce::GlyphArrangement::getStringWidth (font, value) + 12.0f;
+            g.setColour (faded (juce::Colours::black.withAlpha (0.35f)));
+            g.fillRoundedRectangle (juce::Rectangle<float> (w, area.getHeight()).withCentre (area.getCentre()), 4.0f);
+            text (value, area.expanded (12.0f, 0.0f), 10.5f, pale);
         }
         else
         {
-            const auto idle = textColour.withAlpha (0.6f), bright = textColour;
-            const bool dynamicsUsable = ! band->isCut();
-            const bool dynamic = dynamicsUsable && band->range != 0.0f;
-            const auto isLit = [&] (int knob, bool inPopup = false)
+            g.setFont (uiFont (size, true).withExtraKerningFactor (0.06f));
+            g.setColour (faded (textColour.withMultipliedAlpha (enabled ? 0.92f : 0.3f)));
+            g.drawText (name, area.expanded (12.0f, 0.0f), juce::Justification::centred, false);
+        }
+    };
+
+    // A value: plain, or on a dark chip while hovered or turned.
+    const auto value = [&] (juce::Rectangle<float> area, const juce::String& s, bool lit, float size = 10.5f)
+    {
+        if (lit)
+        {
+            const float w = juce::GlyphArrangement::getStringWidth (uiFont (size), s) + 12.0f;
+            g.setColour (faded (juce::Colours::black.withAlpha (0.35f)));
+            g.fillRoundedRectangle (juce::Rectangle<float> (w, area.getHeight()).withCentre (area.getCentre()), 4.0f);
+        }
+        text (s, area.expanded (12.0f, 0.0f), size, lit ? pale : bright);
+    };
+
+    // The panel, solid.
+    // The body, and Gain's housing over its top edge: one surface, the
+    // housing's edge meeting the body's.
+    {
+        auto shape = panelBody (l.panel);
+        shape.addEllipse (housingArea (l.panel));
+        surface (g, shape, l.panel, amount);
+        // The body's edge crosses inside the housing: cover it there.
+        const auto disc = housingArea (l.panel);
+        g.setGradientFill (juce::ColourGradient::vertical (juce::Colour (37, 37, 35).withMultipliedAlpha (amount), l.panel.getY(),
+                                                           juce::Colour (27, 27, 26).withMultipliedAlpha (amount), l.panel.getBottom()));
+        g.fillEllipse (disc.reduced (0.5f));
+    }
+
+    if (band == nullptr)
+    {
+        text ("Double-click the sphere to add a band", l.panel.withTrimmedTop (bodyTop), 12.0f, idle);
+        return;
+    }
+
+    const bool dynamicsUsable = ! band->isCut();
+    const bool dynamic = dynamicsUsable && band->range != 0.0f;
+    const auto isLit = [&] (int knob, bool inPopup = false)
+    {
+        return activeKnob == knob || (hover.kind == Kind::knob && hover.index == knob && hover.inPopup == inPopup);
+    };
+    const auto signColour = [] (float db) { return db < 0.0f ? cutColour : boostColour; };
+
+    // Top left: on / off, solo, the gear.
+    {
+        const bool on = ! band->muted, hovered = hover.kind == Kind::mute;
+        toolBack (l.power, hovered);
+        stroke (powerIcon (l.power.getCentre()), on ? bright : hovered ? idle : faint, 1.5f);
+    }
+    {
+        const bool hovered = hover.kind == Kind::solo;
+        if (soloed)
+        {
+            g.setColour (faded (accentColour));
+            g.fillRoundedRectangle (l.solo, 6.0f);
+        }
+        else
+        {
+            toolBack (l.solo, hovered);
+        }
+        text ("S", l.solo.translated (0.0f, 0.5f), 11.0f, soloed ? graphite : hovered ? bright : faint, juce::Justification::centred, true);
+    }
+    {
+        const bool open = l.popup == PanelPopup::dynamics, hovered = hover.kind == Kind::dynamicsMenu;
+        toolBack (l.gear, hovered && dynamicsUsable);
+        stroke (gearIcon (l.gear.getCentre()), ! dynamicsUsable ? faint.withMultipliedAlpha (0.4f) : open ? accentColour : hovered ? bright : faint, 1.3f);
+    }
+
+    // Top right: < number >, remove, close.
+    {
+        std::array<const Band*, maxBands> order;
+        const int count = bandsByFrequency (bands, order);
+        int place = 0;
+        for (int i = 0; i < count; ++i)
+            if (order[(size_t) i]->id == band->id)
+                place = i;
+
+        stroke (chevron (l.previous.getCentre(), -1.0f, 3.5f), hover.kind == Kind::previous ? bright : faint, 1.5f);
+        stroke (chevron (l.next.getCentre(), 1.0f, 3.5f), hover.kind == Kind::next ? bright : faint, 1.5f);
+        const bool listOpen = l.popup == PanelPopup::bands, hovered = hover.kind == Kind::bandList;
+        if (listOpen || hovered)
+        {
+            g.setColour (faded (textColour.withAlpha (0.085f)));
+            g.fillRoundedRectangle (l.number, 4.0f);
+        }
+        text (juce::String (place + 1), l.number, 11.0f, listOpen ? accentColour : hovered ? pale : idle);
+    }
+    toolBack (l.remove, hover.kind == Kind::remove);
+    stroke (binIcon (l.remove.getCentre()), hover.kind == Kind::remove ? bright : faint, 1.3f);
+    toolBack (l.close, hover.kind == Kind::close);
+    stroke (crossIcon (l.close.getCentre(), 3.0f), hover.kind == Kind::close ? bright : faint, 1.5f);
+
+    // The pills: a glyph, the choice, and a caret for the menu it opens.
+    const auto pill = [&] (juce::Rectangle<float> area, bool open, bool hovered, const juce::String& name)
+    {
+        patch (area, 7.0f, open || hovered);
+        text (name, area.withTrimmedLeft (31.0f).withTrimmedRight (18.0f), 11.0f, bright, juce::Justification::centredLeft);
+        juce::Path caret;
+        const auto c = juce::Point<float> (area.getRight() - 11.0f, area.getCentreY());
+        caret.startNewSubPath (c.x - 2.5f, c.y - 1.2f);
+        caret.lineTo (c.x, c.y + 1.3f);
+        caret.lineTo (c.x + 2.5f, c.y - 1.2f);
+        stroke (caret, faint, 1.3f);
+    };
+    pill (l.typePill, l.popup == PanelPopup::types, hover.kind == Kind::typeMenu, typeName ((int) band->type));
+    stroke (typeGlyph ((int) band->type, { l.typePill.getX() + 17.0f, l.typePill.getCentreY() }), idle, 1.4f);
+    pill (l.stereoPill, l.popup == PanelPopup::stereo, hover.kind == Kind::stereoMenu, band->stereo ? juce::String ("Stereo") : positionText (band->lon));
+    {
+        const auto c = juce::Point<float> (l.stereoPill.getX() + 17.0f, l.stereoPill.getCentreY());
+        juce::Path rings;
+        rings.addEllipse (c.x - 6.5f, c.y - 3.5f, 7.0f, 7.0f);
+        rings.addEllipse (c.x - 0.5f, c.y - 3.5f, 7.0f, 7.0f);
+        stroke (rings, idle, 1.3f);
+    }
+
+    // Freq and Q, their values always shown, on a chip while hovered or turned.
+    for (const auto [c, which] : { std::pair { l.freqCentre, freqKnob }, std::pair { l.qCentre, qKnob } })
+    {
+        const bool enabled = knobEnabled (*band, which), lit = enabled && isLit (which);
+        drawKnob (g, c, sideKnobRadius, knobPosition (*band, which), knobIsBipolar (which), lit, enabled,
+                  amount * (enabled ? 1.0f : 0.32f), true, textColour);
+        if (editing (which))
+            entry (l.valueArea (which));
+        else
+            value (l.valueArea (which), knobText (*band, which), lit);
+    }
+
+    // Gain in its well, and round it the two rings. The outer one: the static
+    // gain out from 0 dB (thin), the range, as far from the gain as the band
+    // can move, with a handle at its end, and over it the move it's making
+    // now. The inner one: the level the band hears, and a notch at the
+    // threshold. The ring under the pointer lights up.
+    {
+        const auto c = l.gainCentre;
+        const auto angleFor = [] (float db) { return knobStartAngle + std::clamp ((db + maxGainDb) / (2.0f * maxGainDb), 0.0f, 1.0f) * knobSweep; };
+        const bool rangeLit = dynamicsUsable && isLit (rangeKnob), thresholdLit = dynamicsUsable && isLit (thresholdKnob);
+
+        g.setColour (faded (juce::Colours::black.withAlpha (0.34f)));
+        g.fillEllipse (juce::Rectangle<float> (2.0f * wellRadius, 2.0f * wellRadius).withCentre (c));
+        g.setColour (faded (textColour.withAlpha (0.05f)));
+        g.drawEllipse (juce::Rectangle<float> (2.0f * wellRadius, 2.0f * wellRadius).withCentre (c), 1.0f);
+
+        const auto groove = [&] (float radius, float width, bool lit)
+        {
+            stroke (arc (c.x, c.y, radius, knobStartAngle, knobStartAngle + knobSweep),
+                    textColour.withAlpha (! dynamicsUsable ? 0.02f : lit ? 0.15f : 0.055f), width);
+        };
+        groove (rangeRadius, rangeWidth, rangeLit);
+
+        if (knobEnabled (*band, gainKnob) && std::abs (band->gainDb) >= 0.05f)
+        {
+            const float zero = angleFor (0.0f), gainAt = angleFor (band->gainDb);
+            stroke (arc (c.x, c.y, rangeRadius, std::min (zero, gainAt), std::max (zero, gainAt)), signColour (band->gainDb).withAlpha (0.7f), 2.0f);
+        }
+
+        if (dynamicsUsable)
+        {
+            const auto colour = signColour (band->range);
+            const float from = angleFor (band->gainDb), reach = angleFor (band->gainDb + band->range);
+            if (dynamic)
             {
-                return activeKnob == knob || (hover.kind == Kind::knob && hover.index == knob && hover.inPopup == inPopup);
-            };
+                stroke (arc (c.x, c.y, rangeRadius, std::min (from, reach), std::max (from, reach)), colour.withAlpha (rangeLit ? 0.65f : 0.5f), rangeWidth - 2.0f);
 
-            const auto knob = [&] (juce::Point<float> c, float radius, int which, bool lit, bool enabled, float dim = 1.0f, bool track = true)
-            {
-                drawKnob (g, c, radius, knobPosition (*band, which), knobIsBipolar (which), lit, enabled,
-                          amount * dim * (enabled ? 1.0f : 0.32f), track);
-            };
-
-            // Left column: the band picker and the filter type.
-            const auto chevron = [&] (juce::Rectangle<float> area, float direction, bool hovered)
-            {
-                const auto c = area.getCentre();
-                juce::Path p;
-                p.startNewSubPath (c.x - direction * 2.5f, c.y - 4.5f);
-                p.lineTo (c.x + direction * 2.5f, c.y);
-                p.lineTo (c.x - direction * 2.5f, c.y + 4.5f);
-                g.setColour (faded (hovered ? bright : idle));
-                strokeRounded (g, p, 1.5f);
-            };
-
-            chevron (l.previous, -1.0f, hover.kind == Kind::previous);
-            chevron (l.next, 1.0f, hover.kind == Kind::next);
-            text ("Band " + juce::String (band->id + 1), l.title, 11.0f, faded (bright));
-
-            {
-                const bool open = l.popup == PanelPopup::types, hovered = hover.kind == Kind::typeMenu;
-                // The type's shape and name; the whole pill opens the list.
-                pill (l.typePill, open, hovered);
-                g.setColour (faded (bright));
-                strokeRounded (g, typeGlyph ((int) band->type, { l.typePill.getX() + 13.0f, l.typePill.getCentreY() }), 1.4f);
-                g.setFont (uiFont (10.0f));
-                g.drawText (typeName ((int) band->type), l.typePill.withTrimmedLeft (25.0f).withTrimmedRight (4.0f), juce::Justification::centredLeft, true);
-            }
-
-            // Right column: solo, mute, remove, stereo / mono, position.
-            buttonBack (l.solo, soloed, hover.kind == Kind::solo);
-            text ("S", l.solo, 11.0f, faded (soloed || hover.kind == Kind::solo ? bright : idle));
-
-            // Mute: a circle with a slash, like a muted node.
-            {
-                buttonBack (l.mute, band->muted, hover.kind == Kind::mute);
-                const auto c = l.mute.getCentre();
-                g.setColour (faded (band->muted || hover.kind == Kind::mute ? bright : idle));
-                g.drawEllipse (c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f, 1.3f);
-                juce::Path slash;
-                slash.startNewSubPath (c.x - 3.5f, c.y + 3.5f);
-                slash.lineTo (c.x + 3.5f, c.y - 3.5f);
-                strokeRounded (g, slash, 1.3f);
-            }
-
-            // Remove: a cross.
-            {
-                buttonBack (l.remove, false, hover.kind == Kind::remove);
-                const auto c = l.remove.getCentre();
-                juce::Path cross;
-                cross.startNewSubPath (c.x - 4.0f, c.y - 4.0f);
-                cross.lineTo (c.x + 4.0f, c.y + 4.0f);
-                cross.startNewSubPath (c.x + 4.0f, c.y - 4.0f);
-                cross.lineTo (c.x - 4.0f, c.y + 4.0f);
-                g.setColour (faded (hover.kind == Kind::remove ? bright : idle));
-                strokeRounded (g, cross, 1.5f);
-            }
-
-            // Mono | Stereo: a two-way switch, the chosen side filled in.
-            {
-                pill (l.stereo, false, false);
-                for (int side = 0; side < 2; ++side)
+                const float now = angleFor (band->gainDb + liveMovement (*band));
+                if (std::abs (now - from) > 0.01f)
                 {
-                    const auto half = side == 0 ? l.stereo.withWidth (l.stereo.getWidth() / 2.0f) : l.stereo.withTrimmedLeft (l.stereo.getWidth() / 2.0f);
-                    const bool chosen = band->stereo == (side == 1), hovered = hover.kind == Kind::stereo && hover.index == side;
-                    if (chosen || hovered)
-                    {
-                        g.setColour (faded (textColour.withAlpha (chosen ? 0.14f : 0.06f)));
-                        g.fillRoundedRectangle (half.reduced (2.0f), 4.0f);
-                    }
-                    text (side == 0 ? "Mono" : "Stereo", half, 9.5f, faded (chosen ? bright : hovered ? bright.withAlpha (0.8f) : idle));
+                    const auto moving = arc (c.x, c.y, rangeRadius, std::min (from, now), std::max (from, now));
+                    stroke (moving, colour.withAlpha (0.25f), rangeWidth + 4.0f); // it glows as it moves
+                    stroke (moving, colour, rangeWidth - 2.0f);
                 }
             }
 
-            // The position: drag or scroll it. A line along its foot shows where
-            // round the sphere it is, L at the left, Side at both ends.
+            // The range's handle, where the band can go: there while it's
+            // dynamic, or the ring is under the pointer.
+            if (dynamic || rangeLit)
             {
-                // A stereo band has no position, so there's nothing to show.
-                const bool enabled = knobEnabled (*band, posKnob), lit = enabled && isLit (posKnob);
-                if (enabled)
-                {
-                    pill (l.positionPill, false, lit);
-                    if (editing (posKnob))
-                        entry (l.positionPill.withTrimmedBottom (4.0f).reduced (4.0f, 1.0f));
-                    else
-                        text (knobText (*band, posKnob), l.positionPill.withTrimmedBottom (4.0f), 10.0f, faded (lit ? bright : bright.withAlpha (0.85f)));
-                    const float y = l.positionPill.getBottom() - 4.0f, x0 = l.positionPill.getX() + 10.0f, x1 = l.positionPill.getRight() - 10.0f;
-                    g.setColour (faded (textColour.withAlpha (0.18f)));
-                    g.drawLine (x0, y, x1, y, 1.0f);
-                    const float at = x0 + (x1 - x0) * knobPosition (*band, posKnob);
-                    g.setColour (faded (bright));
-                    g.fillEllipse (at - 2.0f, y - 2.0f, 4.0f, 4.0f);
-                }
-            }
-
-            // Freq and Q, with their names and values below.
-            const auto sideKnob = [&] (juce::Point<float> c, int which)
-            {
-                const bool enabled = knobEnabled (*band, which), lit = enabled && isLit (which);
-                knob (c, sideKnobRadius, which, lit, enabled);
-                const float dim = enabled ? 1.0f : 0.32f;
-                caption (knobName (*band, which), { c.x - 40.0f, c.y + 21.0f, 80.0f, 12.0f }, faded (idle.withMultipliedAlpha (dim)));
-                if (editing (which))
-                    entry (l.valueArea (which));
-                else
-                    text (knobText (*band, which), { c.x - 40.0f, c.y + 33.0f, 80.0f, 14.0f }, 10.5f,
-                          faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
-            };
-            sideKnob (l.freqCentre, freqKnob);
-            sideKnob (l.qCentre, qKnob);
-
-            // Gain, and round it the range ring: the static gain out from 0 dB
-            // (thinner), the range, as far from the gain as the band can move,
-            // and over it the move it's making now.
-            {
-                const auto c = l.gainCentre;
-                const auto angleFor = [] (float db) { return knobStartAngle + std::clamp ((db + maxGainDb) / (2.0f * maxGainDb), 0.0f, 1.0f) * knobSweep; };
-                const bool ringLit = dynamicsUsable && isLit (rangeKnob);
-
-                // The ring's groove, sunk into the panel.
-                const auto groove = arc (c.x, c.y, ringRadius, knobStartAngle, knobStartAngle + knobSweep);
-                g.setColour (faded (juce::Colours::black.withAlpha (0.32f)));
-                strokeRounded (g, groove, ringWidth + 1.0f);
-                g.setColour (faded (textColour.withAlpha (dynamicsUsable ? (ringLit ? 0.12f : 0.05f) : 0.02f)));
-                strokeRounded (g, groove, ringWidth - 1.0f);
-
-                // The static gain, out from 0 dB at the top.
-                if (knobEnabled (*band, gainKnob) && std::abs (band->gainDb) >= 0.05f)
-                {
-                    const float zero = angleFor (0.0f), gainAt = angleFor (band->gainDb);
-                    g.setColour (faded (band->gainDb > 0.0f ? boostColour : cutColour));
-                    strokeRounded (g, arc (c.x, c.y, ringRadius, std::min (zero, gainAt), std::max (zero, gainAt)), ringWidth - 2.0f);
-                }
-
-                if (dynamic)
-                {
-                    const auto colour = band->range > 0.0f ? boostColour : cutColour;
-                    const float from = angleFor (band->gainDb), reach = angleFor (band->gainDb + band->range);
-                    g.setColour (faded (colour.withAlpha (ringLit ? 0.55f : 0.4f)));
-                    strokeRounded (g, arc (c.x, c.y, ringRadius, std::min (from, reach), std::max (from, reach)), ringWidth);
-
-                    const float now = angleFor (band->gainDb + liveMovement (*band));
-                    if (std::abs (now - from) > 0.01f)
-                    {
-                        const auto moving = arc (c.x, c.y, ringRadius, std::min (from, now), std::max (from, now));
-                        g.setColour (faded (colour.withAlpha (0.25f)));
-                        strokeRounded (g, moving, ringWidth + 5.0f); // it glows as it moves
-                        g.setColour (faded (colour));
-                        strokeRounded (g, moving, ringWidth);
-                    }
-                }
-
-                // The threshold ring: the level the band hears fills it from the
-                // left, coloured past the threshold, where the band starts to
-                // move; a bright notch marks the threshold.
-                {
-                    const bool lit = dynamicsUsable && isLit (thresholdKnob);
-                    const auto levelAngle = [] (float db) { return knobStartAngle + std::clamp ((db - minThresholdDb) / (maxThresholdDb - minThresholdDb), 0.0f, 1.0f) * knobSweep; };
-                    const auto track = arc (c.x, c.y, thresholdRadius, knobStartAngle, knobStartAngle + knobSweep);
-                    g.setColour (faded (juce::Colours::black.withAlpha (0.32f)));
-                    strokeRounded (g, track, thresholdWidth + 1.0f);
-                    g.setColour (faded (textColour.withAlpha (dynamicsUsable ? (lit ? 0.14f : 0.06f) : 0.02f)));
-                    strokeRounded (g, track, thresholdWidth - 1.0f);
-
-                    if (dynamicsUsable)
-                    {
-                        const float at = levelAngle (band->threshold);
-                        if (dynamic && levelDb > minThresholdDb)
-                        {
-                            const float level = levelAngle (levelDb);
-                            g.setColour (faded (textColour.withAlpha (0.35f)));
-                            strokeRounded (g, arc (c.x, c.y, thresholdRadius, knobStartAngle, std::min (level, at)), thresholdWidth);
-                            if (level > at)
-                            {
-                                g.setColour (faded ((band->range > 0.0f ? boostColour : cutColour).withAlpha (0.85f)));
-                                strokeRounded (g, arc (c.x, c.y, thresholdRadius, at, level), thresholdWidth);
-                            }
-                        }
-
-                        const float inner = thresholdRadius - 3.5f, outer = thresholdRadius + 3.5f;
-                        juce::Path notch;
-                        notch.startNewSubPath (c.x + std::sin (at) * inner, c.y - std::cos (at) * inner);
-                        notch.lineTo (c.x + std::sin (at) * outer, c.y - std::cos (at) * outer);
-                        g.setColour (faded (bright.withAlpha (dynamic || lit ? 1.0f : 0.5f)));
-                        strokeRounded (g, notch, lit ? 2.2f : 1.8f);
-                    }
-                }
-
-                const bool enabled = knobEnabled (*band, gainKnob);
-                knob (c, gainKnobRadius, gainKnob, enabled && isLit (gainKnob), enabled, 1.0f, false);
-
-                // Below: Gain's value, or the range's or threshold's while one
-                // is being set, and the live gain change while it's dynamic.
-                int shown = gainKnob;
-                for (int ringKnob : { rangeKnob, thresholdKnob })
-                    if (dynamicsUsable && isLit (ringKnob))
-                        shown = ringKnob;
-                const bool showValue = enabled || shown != gainKnob; // a cut has no gain: just its name, dimmed
-                caption (shown == gainKnob ? "GAIN" : knobName (*band, shown), { c.x - 40.0f, c.y + 31.0f, 80.0f, 12.0f },
-                         faded (idle.withMultipliedAlpha (showValue ? 1.0f : 0.32f)));
-                if (editing (gainKnob))
-                    entry (l.valueArea (gainKnob));
-                else if (showValue)
-                    text (knobText (*band, shown), { c.x - 40.0f, c.y + 43.0f, 80.0f, 14.0f }, 10.5f, faded (bright));
-
-            }
-
-            // The gear, for the rest of the dynamics; cuts have none.
-            if (dynamicsUsable)
-            {
-                const bool open = l.popup == PanelPopup::dynamics, hovered = hover.kind == Kind::dynamicsMenu;
-                const auto c = l.gear.getCentre();
-                g.setColour (faded (open || hovered ? bright : idle.withMultipliedAlpha (0.8f)));
-                g.drawEllipse (c.x - 3.5f, c.y - 3.5f, 7.0f, 7.0f, 1.2f);
-                juce::Path teeth;
-                for (int i = 0; i < 8; ++i)
-                {
-                    const float a = (float) i * pi / 4.0f;
-                    teeth.startNewSubPath (c.x + std::cos (a) * 4.5f, c.y + std::sin (a) * 4.5f);
-                    teeth.lineTo (c.x + std::cos (a) * 6.5f, c.y + std::sin (a) * 6.5f);
-                }
-                strokeRounded (g, teeth, 1.3f);
-            }
-
-            // An open menu, over everything else.
-            if (l.popup == PanelPopup::types)
-            {
-                popupBack (l.popupArea);
-                for (int i = 0; i < numFilterTypes; ++i)
-                {
-                    const auto area = l.typeItems[(size_t) i];
-                    const bool active = (int) band->type == i, hovered = hover.kind == Kind::type && hover.index == i;
-                    buttonBack (area, active, hovered);
-                    g.setColour (faded (active || hovered ? bright : idle));
-                    strokeRounded (g, typeGlyph (i, { area.getX() + 14.0f, area.getCentreY() }), 1.4f);
-                    g.setFont (uiFont (10.5f));
-                    g.drawText (typeName (i), area.withTrimmedLeft (28.0f), juce::Justification::centredLeft, false);
-                }
-            }
-            else if (l.popup == PanelPopup::dynamics)
-            {
-                popupBack (l.popupArea);
-                for (int i = 0; i < 3; ++i)
-                {
-                    const int which = ratioKnob + i;
-                    const auto area = l.dynamicsKnobs[(size_t) i];
-                    const bool lit = dynamicsUsable && isLit (which, true);
-                    const float dim = dynamicsUsable ? 1.0f : 0.32f;
-                    caption (knobName (*band, which), { area.getX(), area.getY(), area.getWidth(), 12.0f }, faded (idle.withMultipliedAlpha (dim)));
-                    knob ({ area.getCentreX(), area.getY() + 27.0f }, popupKnobRadius, which, lit, dynamicsUsable);
-                    if (editing (which))
-                        entry (l.valueArea (which).reduced (4.0f, 0.0f));
-                    else
-                        text (knobText (*band, which), { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f }, 10.5f,
-                              faded ((lit ? bright : bright.withAlpha (0.8f)).withMultipliedAlpha (dim)));
-                }
-
-                // GR: how far the band has moved, a bar that fills down from the
-                // top as it reaches its whole range, and the number under it.
-                {
-                    const auto area = l.grMeter;
-                    const float movement = std::round (liveMovement (*band) * 10.0f) / 10.0f; // as the text shows it
-                    const auto colour = movement > 0.0f ? boostColour : movement < 0.0f ? cutColour : idle;
-                    caption ("GR", { area.getX(), area.getY(), area.getWidth(), 12.0f }, faded (idle.withMultipliedAlpha (dynamic ? 1.0f : 0.32f)));
-
-                    const auto bar = juce::Rectangle<float> (5.0f, 26.0f).withCentre ({ area.getCentreX(), area.getY() + 28.0f });
-                    g.setColour (faded (juce::Colours::black.withAlpha (0.35f)));
-                    g.fillRoundedRectangle (bar, 2.5f);
-                    g.setColour (faded (textColour.withAlpha (0.12f)));
-                    g.drawRoundedRectangle (bar, 2.5f, 1.0f);
-                    if (dynamic)
-                    {
-                        const float share = std::clamp (std::abs (liveMovement (*band)) / std::abs (band->range), 0.0f, 1.0f);
-                        if (share > 0.0f)
-                        {
-                            g.setColour (faded (colour));
-                            g.fillRoundedRectangle (bar.withHeight (std::max (2.0f, bar.getHeight() * share)), 2.5f);
-                        }
-                    }
-
-                    text (knobText (*band, liveGainMeter), { area.getX(), area.getY() + 44.0f, area.getWidth(), 14.0f }, 10.5f,
-                          faded (dynamic ? (movement != 0.0f ? colour : bright.withAlpha (0.8f)) : idle.withMultipliedAlpha (0.4f)));
-                }
-
-                // SC: dynamics follow the sidechain. It turns on only while a
-                // sidechain is coming in, so without one it is greyed out. A
-                // band already set to it stays lit, dimmer, so the setting is
-                // never hidden, and can still be turned off.
-                const bool on = dynamicsUsable && band->externalSidechain;
-                const bool clickable = dynamicsUsable && (on || sidechainConnected);
-                const bool hovered = clickable && hover.kind == Kind::sidechain;
-                pill (l.sidechain, on, hovered);
-                text ("SC", l.sidechain, 11.0f, faded (! clickable ? idle.withMultipliedAlpha (0.4f)
-                                                       : on ? (sidechainConnected ? bright : bright.withAlpha (0.7f))
-                                                       : hovered ? bright : idle));
-                text (sidechainConnected ? "SC in" : "No SC in", l.sidechain.translated (0.0f, 24.0f).expanded (8.0f, 0.0f), 9.0f,
-                      faded (idle.withMultipliedAlpha (0.8f)));
+                const auto handle = juce::Point<float> (c.x + std::sin (reach) * rangeRadius, c.y - std::cos (reach) * rangeRadius);
+                const auto dot = juce::Rectangle<float> (7.2f, 7.2f).withCentre (handle);
+                g.setColour (faded (dynamic ? colour : warmGrey));
+                g.fillEllipse (dot);
+                g.setColour (faded (graphite));
+                g.drawEllipse (dot, 1.2f);
             }
         }
+
+        groove (thresholdRadius, thresholdWidth, thresholdLit);
+        if (dynamicsUsable)
+        {
+            const auto levelAngle = [] (float db) { return knobStartAngle + std::clamp ((db - minThresholdDb) / (maxThresholdDb - minThresholdDb), 0.0f, 1.0f) * knobSweep; };
+            const float at = levelAngle (band->threshold);
+            if (dynamic && levelDb > minThresholdDb)
+            {
+                const float level = levelAngle (levelDb);
+                stroke (arc (c.x, c.y, thresholdRadius, knobStartAngle, std::min (level, at)), textColour.withAlpha (0.3f), thresholdWidth - 2.0f);
+                if (level > at)
+                    stroke (arc (c.x, c.y, thresholdRadius, at, level), signColour (band->range).withAlpha (0.85f), thresholdWidth - 2.0f);
+            }
+
+            const float inner = thresholdRadius - 4.0f, outer = thresholdRadius + 4.0f;
+            juce::Path notch;
+            notch.startNewSubPath (c.x + std::sin (at) * inner, c.y - std::cos (at) * inner);
+            notch.lineTo (c.x + std::sin (at) * outer, c.y - std::cos (at) * outer);
+            stroke (notch, pale.withAlpha (dynamic || thresholdLit ? 1.0f : 0.35f), 2.6f);
+        }
+
+        const bool enabled = knobEnabled (*band, gainKnob);
+        drawKnob (g, c, gainKnobRadius, knobPosition (*band, gainKnob), true, enabled && isLit (gainKnob), enabled,
+                  amount * (enabled ? 1.0f : 0.32f), false, bright);
+
+        // Below: GAIN, or the value of whichever part is under the pointer or
+        // being turned, named when it's a ring.
+        int shown = gainKnob;
+        for (int ring : { rangeKnob, thresholdKnob })
+            if (dynamicsUsable && isLit (ring))
+                shown = ring;
+        const bool lit = shown != gainKnob || (enabled && isLit (gainKnob));
+        if (editing (gainKnob))
+            entry (l.valueArea (gainKnob));
+        else if (! enabled && shown == gainKnob)
+            label (l.valueArea (gainKnob), "GAIN", {}, false, false); // a cut has no gain
+        else
+            value (l.valueArea (gainKnob), (shown == rangeKnob ? "Range " : shown == thresholdKnob ? "Thresh " : "") + knobText (*band, shown), lit);
+    }
+
+    // An open menu, over everything else.
+    switch (l.popup)
+    {
+        case PanelPopup::types:
+            popupBack (l.popupArea, false);
+            for (int i = 0; i < numFilterTypes; ++i)
+            {
+                const auto area = l.typeItems[(size_t) i];
+                const bool on = (int) band->type == i, hovered = hover.kind == Kind::type && hover.index == i;
+                menuItem (area, hovered);
+                stroke (typeGlyph (i, { area.getX() + 15.0f, area.getCentreY() }), on ? accentColour : idle, 1.4f);
+                text (typeName (i), area.withTrimmedLeft (30.0f), 11.0f, on ? accentColour : bright, juce::Justification::centredLeft);
+            }
+            break;
+
+        case PanelPopup::stereo:
+        {
+            popupBack (l.popupArea, false);
+            for (int i = 0; i < numStereoChoices; ++i)
+            {
+                const auto area = l.stereoItems[(size_t) i];
+                const bool on = stereoChoiceIsOn (*band, i);
+                menuItem (area, hover.kind == Kind::stereoItem && hover.index == i);
+                text (stereoChoiceName (i), area.withTrimmedLeft (9.0f), 11.0f, on ? accentColour : bright, juce::Justification::centredLeft);
+            }
+            for (const float y : { l.stereoItems[0].getBottom() + separatorHeight / 2.0f, l.stereoItems[numStereoChoices - 1].getBottom() + separatorHeight / 2.0f })
+            {
+                g.setColour (faded (textColour.withAlpha (0.07f)));
+                g.fillRect (l.popupArea.getX() + 9.0f, y, l.popupArea.getWidth() - 18.0f, 1.0f);
+            }
+
+            // Any position: drag along it, double-click for Mid, or type one.
+            const auto s = l.positionSlider;
+            const bool lit = hover.kind == Kind::positionSlider || isLit (posKnob, true);
+            g.setColour (faded (textColour.withAlpha (lit ? 0.16f : 0.1f)));
+            g.fillRoundedRectangle (s.getX(), s.getCentreY() - 1.0f, s.getWidth(), 2.0f, 1.0f);
+            const auto thumb = juce::Point<float> (s.getX() + s.getWidth() * knobPosition (*band, posKnob), s.getCentreY());
+            const auto colour = band->stereo ? warmGrey : accentColour;
+            g.setColour (faded (colour.withAlpha (0.18f)));
+            g.fillEllipse (juce::Rectangle<float> (16.0f, 16.0f).withCentre (thumb));
+            g.setColour (faded (colour));
+            g.fillEllipse (juce::Rectangle<float> (10.0f, 10.0f).withCentre (thumb));
+            if (editing (posKnob))
+                entry (l.positionValue);
+            else if (isLit (posKnob, true))
+                label (l.positionValue, {}, knobText (*band, posKnob), true, true);
+            else
+                text (band->stereo ? juce::String ("Both") : knobText (*band, posKnob), l.positionValue, 10.5f, band->stereo ? faint : bright);
+            break;
+        }
+
+        case PanelPopup::dynamics:
+        {
+            popupBack (l.popupArea, true);
+            for (int i = 0; i < 3; ++i)
+            {
+                const int which = ratioKnob + i;
+                const auto area = l.dynamicsKnobs[(size_t) i];
+                const bool lit = dynamicsUsable && isLit (which, true);
+                drawKnob (g, { area.getCentreX(), area.getY() + popupKnobRadius + 1.0f }, popupKnobRadius, knobPosition (*band, which), false,
+                          lit, dynamicsUsable, amount * (dynamicsUsable ? 1.0f : 0.32f), true, textColour);
+                if (editing (which))
+                    entry (l.valueArea (which).reduced (2.0f, 0.0f));
+                else
+                    value (l.valueArea (which), knobText (*band, which), lit, 10.0f);
+            }
+
+            g.setColour (faded (textColour.withAlpha (0.07f)));
+            g.fillRect (l.popupArea.getX() + 8.0f, l.sidechain.getY() - 7.0f, l.popupArea.getWidth() - 16.0f, 1.0f);
+
+            // SC: dynamics follow the sidechain. It turns on only while a
+            // sidechain is coming in, so without one it is greyed out. A
+            // band already set to it stays lit, dimmer, so the setting is
+            // never hidden, and can still be turned off.
+            const bool on = dynamicsUsable && band->externalSidechain;
+            const bool clickable = dynamicsUsable && (on || sidechainConnected);
+            const bool hovered = clickable && hover.kind == Kind::sidechain;
+            if (on)
+            {
+                g.setColour (faded (accentColour.withMultipliedAlpha (sidechainConnected ? 1.0f : 0.6f)));
+                g.fillRoundedRectangle (l.sidechain, 6.0f);
+            }
+            else
+            {
+                patch (l.sidechain, 6.0f, hovered);
+            }
+            text ("SC", l.sidechain, 10.0f, on ? graphite : ! clickable ? idle.withMultipliedAlpha (0.45f) : hovered ? bright : idle,
+                  juce::Justification::centred, true);
+            text (sidechainConnected ? (on ? "Sidechain" : "Own signal") : "No SC in", l.sidechainNote, 9.5f, faint, juce::Justification::centredLeft);
+
+            // GR: the move the band is making now, out from the middle, as a
+            // share of its range.
+            const auto meter = l.grMeter;
+            g.setColour (faded (juce::Colour (12, 12, 11)));
+            g.fillRoundedRectangle (meter, 2.5f);
+            if (dynamic)
+            {
+                const float move = liveMovement (*band);
+                const float share = std::clamp (std::abs (move) / std::abs (band->range), 0.0f, 1.0f);
+                if (share > 0.0f)
+                {
+                    const float w = meter.getWidth() / 2.0f * share;
+                    g.setColour (faded (signColour (move)));
+                    g.fillRoundedRectangle (move < 0.0f ? meter.withX (meter.getCentreX() - w).withWidth (w) : meter.withX (meter.getCentreX()).withWidth (w), 2.5f);
+                }
+            }
+            break;
+        }
+
+        case PanelPopup::bands:
+        {
+            popupBack (l.popupArea, true);
+            std::array<const Band*, maxBands> order;
+            const int count = std::min (bandsByFrequency (bands, order), l.bandCount);
+            const float rowHeight = count > 0 ? l.bandItems[0].getHeight() : menuItemHeight; // smaller when there are many
+            const float fontSize = std::min (11.0f, rowHeight - 3.0f), ringSize = std::min (16.0f, rowHeight - 2.0f);
+            for (int i = 0; i < count; ++i)
+            {
+                const auto& b = *order[(size_t) i];
+                const auto area = l.bandItems[(size_t) i];
+                const bool hovered = hover.kind == Kind::bandItem && hover.index == i;
+                if (b.id == band->id)
+                {
+                    g.setColour (faded (accentColour.withAlpha (0.12f)));
+                    g.fillRoundedRectangle (area, 6.0f);
+                }
+                menuItem (area, hovered);
+
+                const float rowAlpha = b.muted ? 0.45f : 1.0f;
+                const auto ring = juce::Rectangle<float> (ringSize, ringSize).withCentre ({ area.getX() + 13.0f, area.getCentreY() });
+                g.setColour (faded (graphite));
+                g.fillEllipse (ring);
+                g.setColour (faded ((b.muted ? warmGrey : signColour (b.isCut() ? -1.0f : b.gainDb)).withMultipliedAlpha (rowAlpha)));
+                g.drawEllipse (ring.reduced (0.75f), 1.5f);
+                text (juce::String (i + 1), ring, std::min (8.5f, ringSize - 6.0f), bright.withMultipliedAlpha (rowAlpha), juce::Justification::centred, true);
+                stroke (typeGlyph ((int) b.type, { area.getX() + 37.0f, area.getCentreY() }), idle.withMultipliedAlpha (rowAlpha), 1.3f);
+                text (formatFreq (latToFreq (b.lat)), area.withTrimmedLeft (52.0f), fontSize, bright.withMultipliedAlpha (rowAlpha), juce::Justification::centredLeft);
+                text (b.isCut() ? juce::String (b.slope) + " dB/oct" : formatGain (b.gainDb), area.withTrimmedRight (8.0f), fontSize - 1.0f,
+                      idle.withMultipliedAlpha (rowAlpha), juce::Justification::centredRight);
+            }
+            break;
+        }
+
+        case PanelPopup::none:
+            break;
     }
 }
 

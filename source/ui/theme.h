@@ -19,6 +19,8 @@ inline const juce::Colour cutColour (229, 72, 77);
 inline const juce::Colour graphite (17, 17, 16);
 inline const juce::Colour textColour (232, 228, 218);
 inline const juce::Colour pale (255, 252, 244);
+// Freq, Q and what is chosen or on: a warm gold.
+inline const juce::Colour accentColour (242, 193, 78);
 // The input's level on the meter, a cool slate against the output's pale.
 inline const juce::Colour inputMeterColour (98, 158, 182);
 
