@@ -354,9 +354,9 @@ bool SphereView::panelWheel (const juce::MouseEvent& e, float delta)
 
 void SphereView::mouseDown (const juce::MouseEvent& e)
 {
-    // A click anywhere sets a value being typed, and cancels one waiting to open.
-    ++valueEditGeneration;
-    endValueEdit (true);
+    // A click anywhere sets a value being typed, unless it's the second click
+    // of a double-click on it: that drops it, and the double-click resets.
+    endValueEdit (e.getNumberOfClicks() < 2);
 
     {
         const std::lock_guard lock (stateLock);
@@ -624,11 +624,11 @@ void SphereView::mouseUp (const juce::MouseEvent& e)
         if (onTrimGainGesture != nullptr)
             onTrimGainGesture (trimDragWhich, false);
         if (! trimDragMoved && e.getNumberOfClicks() == 1)
-            scheduleValueEdit (-1, trimDragWhich);
+            beginValueEdit (-1, trimDragWhich);
     }
 
     if (knobDrag.has_value() && knobDrag->fromValue && ! knobDrag->moved && e.getNumberOfClicks() == 1)
-        scheduleValueEdit (knobDrag->knob, -1);
+        beginValueEdit (knobDrag->knob, -1);
 
     const std::lock_guard lock (stateLock);
     const auto now = nowSeconds();
@@ -886,17 +886,6 @@ void SphereView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
         notifyBandsEdited (edited);
 }
 
-void SphereView::scheduleValueEdit (int knob, int trim)
-{
-    const int generation = ++valueEditGeneration;
-    juce::Timer::callAfterDelay (juce::MouseEvent::getDoubleClickTimeout(),
-                                 [safeThis = juce::Component::SafePointer (this), generation, knob, trim]
-                                 {
-                                     if (safeThis != nullptr && safeThis->valueEditGeneration == generation)
-                                         safeThis->beginValueEdit (knob, trim);
-                                 });
-}
-
 void SphereView::beginValueEdit (int knob, int trim)
 {
     juce::String text;
@@ -922,7 +911,7 @@ void SphereView::beginValueEdit (int knob, int trim)
             text = knobValueText (*band, knob);
         }
 
-        state.valueEdit = ValueEdit { knob, trim, text, true };
+        state.valueEdit = ValueEdit { knob, trim, text, true, text };
         state.lastInteraction = nowSeconds();
     }
 
@@ -941,6 +930,8 @@ void SphereView::endValueEdit (bool commit)
         edit = std::exchange (state.valueEdit, std::nullopt);
         if (! edit.has_value())
             return;
+
+        commit = commit && edit->text != edit->original;
 
         if (commit && edit->knob >= 0)
             if (auto* band = state.bands.find (state.selected); band != nullptr && setKnobFromText (*band, edit->knob, edit->text))

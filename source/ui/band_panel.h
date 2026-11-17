@@ -83,6 +83,7 @@ struct ValueEdit
     int trim = -1; // the gain field: 0 input, 1 output, or -1
     juce::String text;
     bool allSelected = true;
+    juce::String original; // the value as shown: left as it is, nothing changes (it's rounded)
 };
 
 // A value being typed: a field over the value with the text, all of it

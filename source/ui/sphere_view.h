@@ -202,10 +202,9 @@ private:
     void editTrimGain (int which, float db, bool wholeGesture);
 
     // Typing a value: a click on a band knob's value (knob) or a gain field
-    // (trim) opens a field there, once it's clear the click isn't the first
-    // of a double-click (which resets instead). Keys go to the field until
-    // Return or a click elsewhere sets it, or Escape drops it.
-    void scheduleValueEdit (int knob, int trim);
+    // (trim) opens a field there at once. Keys go to the field until Return or
+    // a click elsewhere sets it, or Escape drops it; the second click of a
+    // double-click drops it too, and the double-click resets the value.
     void beginValueEdit (int knob, int trim);
     void endValueEdit (bool commit);
 
@@ -276,7 +275,6 @@ private:
     int trimDragWhich = 0;
     float trimDragDb = 0, trimDragStartY = 0;
     bool trimDragMoved = false;
-    int valueEditGeneration = 0; // a press cancels a value edit still waiting to open
     juce::Point<float> lastPosition;
     std::vector<RotateSample> rotateSamples;
     int wheelBand = -1;
