@@ -12,11 +12,7 @@ Done; see below.
 
 ## Phase 2: Accurate filters
 
-- [ ] Replace the RBJ bell with a design that matches the analog shape up to Nyquist, at no extra CPU. Now a +12 dB bell at 15 kHz at 44.1 kHz is +4.6 dB at 18 kHz where it should be +10.3
-- [ ] Do the same for the shelves
-- [ ] Check the cuts near 20 kHz and the band-passes the dynamics and solo listen through
-- [ ] Tests: each filter type within tolerance of its analog curve at 44.1, 48 and 96 kHz
-- Note: saved sessions will sound slightly different above about 8 kHz
+Done; see below.
 
 ## Phase 3: An accurate sphere
 
@@ -47,6 +43,7 @@ Done; see below.
 
 Move finished items here with their commit, newest first.
 
+- [x] Phase 2: bells, shelves, high cuts and the listen filters keep their analog shape up to Nyquist, with tests against the analog curves at 44.1, 48 and 96 kHz (2f1786c). A +12 dB bell at 15 kHz is +9.6 dB at 18 kHz (analog +10.3, was +4.6). Saved sessions sound slightly different above about 8 kHz
 - [x] Phase 1: all eight review bugs fixed, with tests for the meter, panel hits and track colours (6b0ac5d). The meters hold peaks at any sample rate and start fresh on open; gain-field clicks close panel menus and give way to the preset menu; hidden panel controls never hit; alpha-0 track colours show; the track is passed on only when it changes
 - [x] Phase 0: removed the `spikes_*.png` screenshots from the repo root (moved to the trash; the site has its own copies)
 - [x] Phase 0: the SC button can't be switched on without a sidechain signal, but can always be switched off (dafe7fa)
