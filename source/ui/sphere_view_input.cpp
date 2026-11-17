@@ -198,7 +198,8 @@ bool SphereView::panelMouseDown (const juce::MouseEvent& e)
                 changed = true;
                 break;
             case Kind::sidechain:
-                if (! band->isCut())
+                // SC turns on only while a sidechain is coming in; it can always be turned off.
+                if (! band->isCut() && (band->externalSidechain || state.sidechainConnected))
                 {
                     band->externalSidechain = ! band->externalSidechain;
                     changed = true;

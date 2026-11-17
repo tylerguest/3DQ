@@ -157,6 +157,7 @@ private:
         PanelViewFit panelFit;
         int hovered = -1, dragged = -1;
         std::array<float, maxBands> liveLevelDb {};
+        bool sidechainConnected = false; // the host is feeding the sidechain input
         double lastInteraction = 0;
         bool clicked = false; // a click anywhere stops the auto-rotation until the pointer has gone
     };

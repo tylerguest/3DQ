@@ -811,12 +811,15 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                           faded (dynamic ? (movement != 0.0f ? colour : bright.withAlpha (0.8f)) : idle.withMultipliedAlpha (0.4f)));
                 }
 
-                // SC: dynamics follow the sidechain. It stays lit without a
-                // sidechain, dimmer, so the setting is never hidden.
+                // SC: dynamics follow the sidechain. It turns on only while a
+                // sidechain is coming in, so without one it is greyed out. A
+                // band already set to it stays lit, dimmer, so the setting is
+                // never hidden, and can still be turned off.
                 const bool on = dynamicsUsable && band->externalSidechain;
-                const bool hovered = dynamicsUsable && hover.kind == Kind::sidechain;
+                const bool clickable = dynamicsUsable && (on || sidechainConnected);
+                const bool hovered = clickable && hover.kind == Kind::sidechain;
                 pill (l.sidechain, on, hovered);
-                text ("SC", l.sidechain, 11.0f, faded (! dynamicsUsable ? idle.withMultipliedAlpha (0.4f)
+                text ("SC", l.sidechain, 11.0f, faded (! clickable ? idle.withMultipliedAlpha (0.4f)
                                                        : on ? (sidechainConnected ? bright : bright.withAlpha (0.7f))
                                                        : hovered ? bright : idle));
                 text (sidechainConnected ? "SC in" : "No SC in", l.sidechain.translated (0.0f, 24.0f).expanded (8.0f, 0.0f), 9.0f,

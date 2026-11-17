@@ -371,6 +371,7 @@ void SphereView::renderOpenGL()
         const std::lock_guard lock (stateLock);
 
         std::array<bool, maxBands> meterInUse {};
+        state.sidechainConnected = live.hasSidechain;
 
         for (auto& b : state.bands)
         {
