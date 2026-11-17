@@ -124,6 +124,7 @@ public:
                     expected.add ("band" + juce::String (band) + "_" + name);
             expected.add ("in");
             expected.add ("out");
+            expected.add ("bypass");
 
             juce::StringArray actual;
             bool allVersion1 = true;
@@ -134,7 +135,7 @@ public:
                     allVersion1 = allVersion1 && withId->getVersionHint() == 1;
                 }
 
-            expectEquals (actual.size(), 182);
+            expectEquals (actual.size(), 183);
             expect (actual == expected, "IDs or their order changed");
             expect (allVersion1, "every parameter has version hint 1");
         }
@@ -377,6 +378,89 @@ public:
             expect (p->hasSidechainInput());
             juce::Thread::sleep (600);
             expect (! p->hasSidechainInput(), "no blocks for 600 ms: the GUI stops showing a frozen sidechain");
+        }
+
+        beginTest ("Bypass is the host's bypass parameter, off by default");
+        {
+            ThreeDQProcessor p;
+            expect (p.getBypassParameter() == p.state.getParameter (ThreeDQProcessor::bypassID));
+            expectEquals (p.getBypassParameter()->getValue(), 0.0f);
+        }
+
+        beginTest ("Bypass fades to the untouched input, gains included, and back again");
+        {
+            auto p = makeProcessor();
+            addPeak (*p, 0, 1000.0f, 12.0f);
+            set (*p, ThreeDQProcessor::inputGainID, 6.0f);
+            set (*p, ThreeDQProcessor::outputGainID, -3.0f);
+            expectWithinAbsoluteError (gainThrough (*p, 1000.0), 15.0, 0.3, "the EQ and gains are on");
+
+            set (*p, ThreeDQProcessor::bypassID, 1.0f);
+            const auto in = sine (1000.0, sr, 48000);
+            auto left = in, right = in;
+            run (*p, left, right);
+
+            // No jump: the first samples are still close to the processed level.
+            const float processedPeak = 0.25f * juce::Decibels::decibelsToGain (15.0f);
+            expectGreaterThan (std::abs (left[(size_t) (sr / 4000.0)]), 0.9f * processedPeak, "it doesn't switch at once");
+
+            // Once faded, the output is the input exactly.
+            const size_t settled = (size_t) (sr * ThreeDQProcessor::bypassFadeSeconds) + blockSize;
+            float worst = 0;
+            for (size_t i = settled; i < in.size(); ++i)
+                worst = std::max ({ worst, std::abs (left[i] - in[i]), std::abs (right[i] - in[i]) });
+            expectLessThan (worst, 1.0e-6f, "fully bypassed it is untouched");
+
+            set (*p, ThreeDQProcessor::bypassID, 0.0f);
+            auto back = in, backRight = in;
+            run (*p, back, backRight);
+            expectLessThan (std::abs (back[(size_t) (sr / 4000.0)]), 0.3f, "coming back fades too");
+            expectWithinAbsoluteError (gainDb (std::vector<float> (in.begin() + 24000, in.end()), std::vector<float> (back.begin() + 24000, back.end())), 15.0, 0.3,
+                                       "and the EQ is back");
+        }
+
+        beginTest ("Bypass fades without a step from sample to sample");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::inputGainID, 12.0f); // the processed signal is four times the input
+            std::vector<float> dc (4096, 0.25f), dcRight = dc;
+            run (*p, dc, dcRight);
+            set (*p, ThreeDQProcessor::bypassID, 1.0f);
+            std::vector<float> more (4096, 0.25f), moreRight = more;
+            run (*p, more, moreRight);
+            float biggestStep = std::abs (more[0] - dc.back());
+            for (size_t i = 1; i < more.size(); ++i)
+                biggestStep = std::max (biggestStep, std::abs (more[i] - more[i - 1]));
+            expectLessThan (biggestStep, 0.01f);
+        }
+
+        beginTest ("Bypassed when prepared: it starts bypassed, without fading in");
+        {
+            auto p = std::make_unique<ThreeDQProcessor>();
+            addPeak (*p, 0, 1000.0f, 12.0f);
+            set (*p, ThreeDQProcessor::bypassID, 1.0f);
+            p->prepareToPlay (sr, blockSize);
+            const auto in = sine (1000.0, sr, 4800);
+            auto left = in, right = in;
+            run (*p, left, right);
+            float worst = 0;
+            for (size_t i = 0; i < in.size(); ++i)
+                worst = std::max (worst, std::abs (left[i] - in[i]));
+            expectLessThan (worst, 1.0e-6f);
+        }
+
+        beginTest ("A host block bigger than promised still bypasses cleanly");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::bypassID, 1.0f);
+            addPeak (*p, 0, 1000.0f, 12.0f);
+            const auto in = sine (1000.0, sr, 4 * blockSize);
+            auto left = in, right = in;
+            juce::MidiBuffer midi;
+            float* channels[] = { left.data(), right.data() };
+            juce::AudioBuffer<float> buffer (channels, 2, (int) in.size());
+            p->processBlock (buffer, midi);
+            expectLessThan (std::abs (left.back() - in.back()), 1.0e-3f);
         }
 
         beginTest ("Output gain scales the output, gliding to a change");

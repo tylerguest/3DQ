@@ -80,6 +80,12 @@ public:
     static inline const juce::String inputGainID { "in" };
     static inline const juce::String outputGainID { "out" };
 
+    // The host's bypass, as a parameter of our own so the plugin keeps running
+    // and fades between the EQ and the untouched input instead of switching.
+    static inline const juce::String bypassID { "bypass" };
+    static constexpr double bypassFadeSeconds = 0.03;
+    juce::AudioProcessorParameter* getBypassParameter() const override    { return state.getParameter (bypassID); }
+
     // enabled = the slot holds a band (it's on the sphere), regardless of mute.
     BandParams getBandParams (int slot) const;
     bool isBandMuted (int slot) const;
@@ -175,6 +181,10 @@ private:
     GainGlide inputLevel { 1.0f }, outputLevel { 1.0f };     // their linear gains, gliding
     using HeldPeaks = std::array<std::atomic<float>, 2>; // per channel, held until the GUI takes them
     HeldPeaks inputPeak {}, outputPeak {};
+
+    std::atomic<float>* bypass = nullptr;
+    juce::SmoothedValue<float> bypassMix { 0.0f };           // 0 = the EQ, 1 = the untouched input
+    juce::AudioBuffer<float> dryBuffer;                      // this block's input, for the bypass fade
 
     static void applyGain (GainGlide&, float db, juce::AudioBuffer<float>&);
     static void holdPeaks (const juce::AudioBuffer<float>&, HeldPeaks&);

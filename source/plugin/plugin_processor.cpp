@@ -22,6 +22,7 @@ ThreeDQProcessor::ThreeDQProcessor()
 {
     inputGain = state.getRawParameterValue (inputGainID);
     outputGain = state.getRawParameterValue (outputGainID);
+    bypass = state.getRawParameterValue (bypassID);
 
     for (int i = 0; i < maxBands; ++i)
     {
@@ -116,6 +117,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ThreeDQProcessor::createPara
         layout.add (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { id, 1 }, name,
                                                                  juce::NormalisableRange<float> (-maxTrimGainDb, maxTrimGainDb), 0.0f,
                                                                  juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { bypassID, 1 }, "Bypass", false));
     return layout;
 }
 
@@ -137,8 +139,10 @@ bool ThreeDQProcessor::isBandMuted (int slot) const
 //==============================================================================
 void ThreeDQProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::ignoreUnused (samplesPerBlock);
     eq.prepare (sampleRate);
+    dryBuffer.setSize (2, std::max (samplesPerBlock, 1));
+    bypassMix.reset (sampleRate, bypassFadeSeconds);
+    bypassMix.setCurrentAndTargetValue (bypass->load() >= 0.5f ? 1.0f : 0.0f);
     for (auto [level, db] : { std::pair { &inputLevel, inputGain }, std::pair { &outputLevel, outputGain } })
     {
         level->reset (sampleRate, 0.03);
@@ -214,12 +218,47 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     if (sidechainLeft != nullptr)
         sidechainRing.push (sidechainLeft, sidechainRight, buffer.getNumSamples());
 
+    // Bypassed or fading: keep the input as it came, to fade to. The EQ keeps
+    // running underneath, so coming back is as smooth as going.
+    const int numSamples = buffer.getNumSamples();
+    bypassMix.setTargetValue (bypass->load (std::memory_order_relaxed) >= 0.5f ? 1.0f : 0.0f);
+    const bool bypassing = bypassMix.isSmoothing() || bypassMix.getTargetValue() > 0.0f;
+
+    if (bypassing)
+    {
+        if (dryBuffer.getNumSamples() < numSamples) // a host sent a bigger block than it promised
+            dryBuffer.setSize (2, numSamples, false, false, true);
+        for (int ch = 0; ch < 2; ++ch)
+            dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+    }
+
     // The input gain, then the input level for the meter.
     applyGain (inputLevel, inputGain->load (std::memory_order_relaxed), buffer);
     holdPeaks (buffer, inputPeak);
 
     eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
     applyGain (outputLevel, outputGain->load (std::memory_order_relaxed), buffer);
+
+    if (bypassing && ! bypassMix.isSmoothing())
+    {
+        for (int ch = 0; ch < 2; ++ch) // fully bypassed: the input exactly
+            buffer.copyFrom (ch, 0, dryBuffer, ch, 0, numSamples);
+    }
+    else if (bypassing)
+    {
+        auto* left = buffer.getWritePointer (0);
+        auto* right = buffer.getWritePointer (1);
+        const auto* dryLeft = dryBuffer.getReadPointer (0);
+        const auto* dryRight = dryBuffer.getReadPointer (1);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float mix = bypassMix.getNextValue();
+            left[i] += (dryLeft[i] - left[i]) * mix;
+            right[i] += (dryRight[i] - right[i]) * mix;
+        }
+    }
+
     holdPeaks (buffer, outputPeak);
 
     // Feed the GUI's analyser with the processed output.
