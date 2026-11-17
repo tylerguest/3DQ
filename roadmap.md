@@ -16,10 +16,7 @@ Done; see below.
 
 ## Phase 3: An accurate sphere
 
-- [ ] Draw bell bumps from the real filter response along frequency, as shelves and cuts already are. Now a Q 4 bell at half an octave away draws at 72% of its peak where the filter is at 13%
-- [ ] Keep it cheap: compute each band's response once per frame for each frequency row, then look it up per particle
-- [ ] Update `test_bands.cpp` for the new shape
-- [ ] Check visually that the bulge, the colour and the spikes agree at Q 0.5, 1 and 4
+Done; see below.
 
 ## Phase 4: Workflow
 
@@ -43,6 +40,7 @@ Done; see below.
 
 Move finished items here with their commit, newest first.
 
+- [x] Phase 3: bells on the sphere follow their real response, round, with the rings and colour from the same shape; per-bell lookup tables keep it cheap (414aa82). A Q 4 bell half an octave out draws at its real height, not 72% of its peak. Above Q 4 the drawn width narrows more slowly (Q 40 draws as Q 8) so it never falls between particles
 - [x] Phase 2: bells, shelves, high cuts and the listen filters keep their analog shape up to Nyquist, with tests against the analog curves at 44.1, 48 and 96 kHz (2f1786c). A +12 dB bell at 15 kHz is +9.6 dB at 18 kHz (analog +10.3, was +4.6). Saved sessions sound slightly different above about 8 kHz
 - [x] Phase 1: all eight review bugs fixed, with tests for the meter, panel hits and track colours (6b0ac5d). The meters hold peaks at any sample rate and start fresh on open; gain-field clicks close panel menus and give way to the preset menu; hidden panel controls never hit; alpha-0 track colours show; the track is passed on only when it changes
 - [x] Phase 0: removed the `spikes_*.png` screenshots from the repo root (moved to the trash; the site has its own copies)
