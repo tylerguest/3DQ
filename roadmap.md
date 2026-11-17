@@ -8,23 +8,7 @@ Work through the phases in order. Each phase lands as its own commit or commits,
 
 ## Phase 1: Open review bugs
 
-Meters:
-- [ ] The output meter reads only the last 2048 samples each frame, so it misses peaks at 96 kHz and above. Read everything since the last frame (`plugin_editor.cpp`, `meterWindow`)
-- [ ] The input peak builds up while the editor is closed. Clear it when the editor opens (`takeInputPeak`)
-
-Clicks and wheel (`sphere_view_input.cpp`):
-- [ ] A click on a gain field leaves an open type or dynamics menu up. Close it, as every other click outside the panel does
-- [ ] The gain fields and the preset menu disagree over the wheel and the hover highlight. Use one rule in mouse move, mouse up and the wheel
-
-Band panel (`band_panel.cpp`):
-- [ ] `hit()` still returns hidden controls: the position control on stereo bands and the gear on cuts
-- [ ] Whether the gain value is drawn depends on `dim == 1.0f`. Use `knobEnabled` instead
-
-Host:
-- [ ] Accept host track colours sent with alpha 0 (`sphere_view_overlay.cpp`)
-- [ ] Call `setTrack` only when the track name or colour changes, not on every timer tick (`plugin_editor.cpp`)
-
-Add a test for each fix that the suite can reach.
+Done; see below.
 
 ## Phase 2: Accurate filters
 
@@ -63,5 +47,6 @@ Add a test for each fix that the suite can reach.
 
 Move finished items here with their commit, newest first.
 
+- [x] Phase 1: all eight review bugs fixed, with tests for the meter, panel hits and track colours (6b0ac5d). The meters hold peaks at any sample rate and start fresh on open; gain-field clicks close panel menus and give way to the preset menu; hidden panel controls never hit; alpha-0 track colours show; the track is passed on only when it changes
 - [x] Phase 0: removed the `spikes_*.png` screenshots from the repo root (moved to the trash; the site has its own copies)
 - [x] Phase 0: the SC button can't be switched on without a sidechain signal, but can always be switched off (dafe7fa)
