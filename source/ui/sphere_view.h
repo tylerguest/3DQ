@@ -91,6 +91,10 @@ public:
     // The host's track, shown in the middle of the bottom bar. Message thread.
     void setTrack (const juce::String& name, std::optional<juce::Colour> colour);
 
+    // A host's track colour (ARGB) as one to show. Some hosts leave the alpha
+    // at 0 for a real colour, so it's made opaque; all zeros means none.
+    static std::optional<juce::Colour> hostTrackColour (std::optional<juce::uint32> argb);
+
     void resized() override;
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
@@ -183,6 +187,11 @@ private:
     PresetBarLayout presetLayoutLocked() const;
     bool overHelpButton (juce::Point<float> position) const;
     int trimFieldAt (juce::Point<float> position) const; // -1 when over neither
+    // The gain field the pointer works on: none while the preset menu is open,
+    // which takes the pointer first.
+    int trimTargetLocked (juce::Point<float> position) const;
+    // Closes the band panel's open menu, if any. Returns whether one was open.
+    bool dismissPanelPopupLocked();
     void editTrimGain (int which, float db, bool wholeGesture);
 
     void pointerMoved (const juce::MouseEvent&);

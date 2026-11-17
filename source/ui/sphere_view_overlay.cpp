@@ -388,7 +388,7 @@ void SphereView::drawBottomBar (juce::Graphics& g, const Camera& camera, int tri
     if (trackName.isNotEmpty())
     {
         const auto font = uiFont (11.0f * unit);
-        const bool dot = trackColour.has_value() && trackColour->getAlpha() > 0;
+        const bool dot = trackColour.has_value();
         const float dotSpace = dot ? 13.0f * unit : 0.0f;
         const float flare = 8.0f * unit, pad = 20.0f * unit; // the tab's, below
         const float room = 2.0f * (trimFieldArea (w, bottom, unit, 1).getX() - w / 2.0f - flare - pad - 4.0f * unit) - dotSpace;

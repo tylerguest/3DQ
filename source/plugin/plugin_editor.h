@@ -63,7 +63,12 @@ private:
     std::atomic<bool> hostChangedBands { false };
 
     StereoSpectrum spectrum, sidechainSpectrum;
-    static constexpr size_t meterWindow = 2048; // samples the output meter reads each frame: over 40 ms, longer than a frame
+    // The host track last shown, so it's only passed on when it changes.
+    std::optional<juce::String> shownTrackName;
+    std::optional<juce::uint32> shownTrackColour;
+    bool trackShown = false;
+
+    bool metersPrimed = false; // render thread: the peaks held before the first frame have been dropped
     std::vector<float> recentLeft  = std::vector<float> ((size_t) StereoSpectrum::fftSize);
     std::vector<float> recentRight = std::vector<float> ((size_t) StereoSpectrum::fftSize);
 

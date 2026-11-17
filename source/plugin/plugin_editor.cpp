@@ -335,25 +335,29 @@ void ThreeDQEditor::readLiveAudio (SphereView::LiveAudio& live)
     audioProcessor.copyRecentOutput (recentLeft.data(), recentRight.data(), StereoSpectrum::fftSize);
     live.spectrum = spectrum.analyse (recentLeft.data(), recentRight.data(), audioProcessor.getAnalysisSampleRate());
 
-    // The output meter: each channel's peak over the latest stretch, which is
-    // longer than a frame, so no peak slips between two reads.
-    const bool processing = audioProcessor.isProcessing();
-    for (size_t ch = 0; ch < 2; ++ch)
+    // The meters: each channel's loudest sample since the last frame, at any
+    // sample rate. The processor holds them while the window is closed, so the
+    // first frame drops what built up and starts from now.
+    if (! metersPrimed)
     {
-        const auto& samples = ch == 0 ? recentLeft : recentRight;
-        float peak = 0.0f;
-        for (size_t i = samples.size() - meterWindow; i < samples.size(); ++i)
-            peak = std::max (peak, std::abs (samples[i]));
-        live.outputPeakDb[ch] = processing ? juce::Decibels::gainToDecibels (peak, -120.0f) : -120.0f;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            audioProcessor.takeInputPeak (ch);
+            audioProcessor.takeOutputPeak (ch);
+        }
+        metersPrimed = true;
+    }
+
+    const bool processing = audioProcessor.isProcessing();
+    const auto toDb = [processing] (float peak)    { return processing ? juce::Decibels::gainToDecibels (peak, -120.0f) : -120.0f; };
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        live.inputPeakDb[(size_t) ch] = toDb (audioProcessor.takeInputPeak (ch));
+        live.outputPeakDb[(size_t) ch] = toDb (audioProcessor.takeOutputPeak (ch));
     }
 
     live.trimGainDb = { audioProcessor.state.getRawParameterValue (ThreeDQProcessor::inputGainID)->load(),
                         audioProcessor.state.getRawParameterValue (ThreeDQProcessor::outputGainID)->load() };
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        const float peak = audioProcessor.takeInputPeak (ch);
-        live.inputPeakDb[(size_t) ch] = processing ? juce::Decibels::gainToDecibels (peak, -120.0f) : -120.0f;
-    }
     live.hasSidechain = audioProcessor.hasSidechainInput();
     if (live.hasSidechain)
     {
@@ -377,9 +381,14 @@ void ThreeDQEditor::parameterChanged (const juce::String&, float)
 
 void ThreeDQEditor::timerCallback()
 {
-    const auto& track = audioProcessor.getTrackProperties();
-    sphereView.setTrack (track.name.value_or (juce::String()),
-                         track.colourARGB.has_value() ? std::optional<juce::Colour> (juce::Colour (*track.colourARGB)) : std::nullopt);
+    if (const auto& track = audioProcessor.getTrackProperties();
+        ! trackShown || track.name != shownTrackName || track.colourARGB != shownTrackColour)
+    {
+        shownTrackName = track.name;
+        shownTrackColour = track.colourARGB;
+        trackShown = true;
+        sphereView.setTrack (track.name.value_or (juce::String()), SphereView::hostTrackColour (track.colourARGB));
+    }
 
     auto& bank = audioProcessor.presets;
     const auto sessionName = sessionPresetName();

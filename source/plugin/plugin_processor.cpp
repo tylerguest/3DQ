@@ -216,22 +216,29 @@ void ThreeDQProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     // The input gain, then the input level for the meter.
     applyGain (inputLevel, inputGain->load (std::memory_order_relaxed), buffer);
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        const auto range = buffer.findMinMax (ch, 0, buffer.getNumSamples());
-        const float peak = std::max (-range.getStart(), range.getEnd());
-        auto& held = inputPeak[(size_t) ch];
-        if (peak > held.load (std::memory_order_relaxed))
-            held.store (peak, std::memory_order_relaxed); // a read racing this only loses one block's peak
-    }
+    holdPeaks (buffer, inputPeak);
 
     eq.process (buffer.getWritePointer (0), buffer.getWritePointer (1), buffer.getNumSamples(), sidechainLeft, sidechainRight);
     applyGain (outputLevel, outputGain->load (std::memory_order_relaxed), buffer);
+    holdPeaks (buffer, outputPeak);
 
     // Feed the GUI's analyser with the processed output.
     outputRing.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
     lastBlockMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
     processedAny.store (true, std::memory_order_relaxed);
+}
+
+// Raises each channel's held peak to this block's, if it's louder.
+void ThreeDQProcessor::holdPeaks (const juce::AudioBuffer<float>& buffer, HeldPeaks& peaks)
+{
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const auto range = buffer.findMinMax (ch, 0, buffer.getNumSamples());
+        const float peak = std::max (-range.getStart(), range.getEnd());
+        auto& held = peaks[(size_t) ch];
+        if (peak > held.load (std::memory_order_relaxed))
+            held.store (peak, std::memory_order_relaxed); // a read racing this only loses one block's peak
+    }
 }
 
 // Scales both channels by a gain in dB, gliding to a new one so a change never clicks.

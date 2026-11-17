@@ -100,6 +100,14 @@ void SphereView::setTrack (const juce::String& name, std::optional<juce::Colour>
     state.trackColour = colour;
 }
 
+std::optional<juce::Colour> SphereView::hostTrackColour (std::optional<juce::uint32> argb)
+{
+    if (! argb.has_value() || *argb == 0)
+        return std::nullopt;
+    const juce::Colour colour (*argb);
+    return colour.getAlpha() == 0 ? colour.withAlpha ((juce::uint8) 255) : colour;
+}
+
 void SphereView::notifyBandsEdited (const BandSet& bands)
 {
     if (onBandsEdited != nullptr)
@@ -222,6 +230,27 @@ int SphereView::trimFieldAt (juce::Point<float> position) const
     return -1;
 }
 
+int SphereView::trimTargetLocked (juce::Point<float> position) const
+{
+    return state.presetMenuOpen ? -1 : trimFieldAt (position);
+}
+
+bool SphereView::dismissPanelPopupLocked()
+{
+    if (state.panelPopup == PanelPopup::none || ! state.panelOpen)
+        return false;
+
+    // With the dynamics menu up, it puts the panel away too.
+    if (state.panelPopup == PanelPopup::dynamics)
+    {
+        state.panelHidden = true;
+        state.selected = -1;
+    }
+
+    state.panelPopup = PanelPopup::none;
+    return true;
+}
+
 // Sets a gain, clamped; wholeGesture wraps it in a gesture of its own.
 void SphereView::editTrimGain (int which, float db, bool wholeGesture)
 {
@@ -286,7 +315,7 @@ void SphereView::selectNeighbourLocked (int direction)
 PanelTarget SphereView::panelTargetLocked (juce::Point<float> position) const
 {
     const auto layout = BandPanelLayout::make ((float) getWidth(), (float) getHeight(), state.panelOpen ? 1.0f : 0.0f, state.panelPopup);
-    return layout.hit (position, state.panelOpen, state.bands.find (state.selected) != nullptr);
+    return layout.hit (position, state.panelOpen, state.bands.find (state.selected));
 }
 
 PresetBarLayout SphereView::presetLayoutLocked() const

@@ -483,6 +483,21 @@ public:
             expectWithinAbsoluteError (p->takeInputPeak (0), 0.8f, 0.01f, "a quieter block after doesn't lower it");
         }
 
+        beginTest ("The output meter is per channel, after the output gain, and keeps the loudest sample until it's read");
+        {
+            auto p = makeProcessor();
+            set (*p, ThreeDQProcessor::outputGainID, -6.0f);
+            p->prepareToPlay (sr, blockSize);
+            auto left = sine (1000.0, sr, 4800, 0.5f);
+            auto right = sine (1000.0, sr, 4800, 0.125f);
+            run (*p, left, right);
+            auto quietL = sine (1000.0, sr, 4096, 0.01f), quietR = quietL;
+            run (*p, quietL, quietR);
+            expectWithinAbsoluteError (juce::Decibels::gainToDecibels (p->takeOutputPeak (0)), juce::Decibels::gainToDecibels (0.5f) - 6.0f, 0.1f, "left");
+            expectWithinAbsoluteError (juce::Decibels::gainToDecibels (p->takeOutputPeak (1)), juce::Decibels::gainToDecibels (0.125f) - 6.0f, 0.1f, "right");
+            expectEquals (p->takeOutputPeak (0), 0.0f, "taking it resets it");
+        }
+
         beginTest ("Preparing again starts the gains where they are, not gliding from 0 dB");
         {
             auto p = makeProcessor();

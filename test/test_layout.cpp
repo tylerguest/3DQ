@@ -18,6 +18,8 @@ namespace
 {
 using Kind = PanelTarget::Kind;
 
+const Band peak {}; // a mono peak band: every control shows
+
 // The minimum window, the default, and a big one.
 constexpr std::array<std::pair<float, float>, 3> windowSizes { { { 440.0f, 340.0f }, { 760.0f, 560.0f }, { 1100.0f, 720.0f } } };
 
@@ -85,7 +87,7 @@ public:
         {
             const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
             const auto name = sizeName (w, h);
-            auto hitAt = [&] (juce::Point<float> p)    { return l.hit (p * l.scale, true, true); };
+            auto hitAt = [&] (juce::Point<float> p)    { return l.hit (p * l.scale, true, &peak); };
 
             expect (hitAt (l.previous.getCentre()).kind == Kind::previous, "previous " + name);
             expect (hitAt (l.next.getCentre()).kind == Kind::next, "next " + name);
@@ -100,6 +102,30 @@ public:
             expect (hitAt (l.gainCentre) == PanelTarget { Kind::knob, gainKnob }, "gain " + name);
             expect (hitAt (l.freqCentre) == PanelTarget { Kind::knob, freqKnob }, "freq " + name);
             expect (hitAt (l.qCentre) == PanelTarget { Kind::knob, qKnob }, "q " + name);
+        }
+
+        beginTest ("Controls a band doesn't show never hit: a stereo band's position, a cut's gear");
+        for (const auto [w, h] : windowSizes)
+        {
+            const auto l = BandPanelLayout::make (w, h, 1.0f, PanelPopup::none);
+            const auto name = sizeName (w, h);
+            Band stereo;
+            stereo.stereo = true;
+            Band cut;
+            cut.type = FilterType::lowCut;
+
+            expect (l.hit (l.positionPill.getCentre() * l.scale, true, &stereo).kind == Kind::background, "stereo position " + name);
+            expect (l.hit (l.gear.getCentre() * l.scale, true, &cut).kind == Kind::background, "cut gear " + name);
+            expect (l.hit (l.gear.getCentre() * l.scale, true, &stereo).kind == Kind::dynamicsMenu, "a stereo peak keeps its gear " + name);
+        }
+
+        beginTest ("Host track colours: alpha 0 still counts, all zeros is none");
+        {
+            expect (! SphereView::hostTrackColour (std::nullopt).has_value());
+            expect (! SphereView::hostTrackColour (0u).has_value());
+            expect (SphereView::hostTrackColour (0x00ff8020u) == juce::Colour (0xffff8020u), "alpha 0 is made opaque");
+            expect (SphereView::hostTrackColour (0xff336699u) == juce::Colour (0xff336699u), "an opaque colour is kept");
+            expect (SphereView::hostTrackColour (0x80336699u) == juce::Colour (0x80336699u), "so is a partial alpha");
         }
 
         beginTest ("The side controls sit in the panel's shoulders, below the wave, and don't overlap");
@@ -126,7 +152,7 @@ public:
         beginTest ("The outline: a crown over Gain, lower shoulders either side");
         {
             const auto l = BandPanelLayout::make (760.0f, 560.0f, 1.0f, PanelPopup::none);
-            auto hitAt = [&] (float x, float y)    { return l.hit (juce::Point<float> (x, y) * l.scale, true, true).kind; };
+            auto hitAt = [&] (float x, float y)    { return l.hit (juce::Point<float> (x, y) * l.scale, true, &peak).kind; };
             const float top = l.panel.getY();
 
             expect (hitAt (l.panel.getCentreX(), top + 6.0f) != Kind::none, "the crown rises over the centre");
@@ -142,9 +168,9 @@ public:
         {
             const auto l = BandPanelLayout::make (760.0f, 560.0f, 1.0f, PanelPopup::none);
             const auto gain = l.gainCentre * l.scale;
-            expect (l.hit (gain, false, true).kind == Kind::none);
-            expect (l.hit (gain, true, false).kind == Kind::background);
-            expect (l.hit (l.solo.getCentre() * l.scale, true, false).kind == Kind::background);
+            expect (l.hit (gain, false, &peak).kind == Kind::none);
+            expect (l.hit (gain, true, nullptr).kind == Kind::background);
+            expect (l.hit (l.solo.getCentre() * l.scale, true, nullptr).kind == Kind::background);
         }
 
         beginTest ("The type menu opens above its pill; its items hit as types in the menu");
@@ -154,10 +180,10 @@ public:
             const auto name = sizeName (w, h);
             expectLessOrEqual (l.popupArea.getBottom(), l.typePill.getY(), name);
             for (int i = 0; i < numFilterTypes; ++i)
-                expect (l.hit (l.typeItems[(size_t) i].getCentre() * l.scale, true, true) == PanelTarget { Kind::type, i, true }, name);
-            expect (l.hit (l.popupArea.getTopLeft().translated (1.0f, 1.0f) * l.scale, true, true) == PanelTarget { Kind::background, 0, true },
+                expect (l.hit (l.typeItems[(size_t) i].getCentre() * l.scale, true, &peak) == PanelTarget { Kind::type, i, true }, name);
+            expect (l.hit (l.popupArea.getTopLeft().translated (1.0f, 1.0f) * l.scale, true, &peak) == PanelTarget { Kind::background, 0, true },
                     "the menu's edge keeps it open " + name);
-            expect (l.hit (l.typeItems[0].getCentre() * l.scale, true, false).kind == Kind::none, "no band, no menu " + name);
+            expect (l.hit (l.typeItems[0].getCentre() * l.scale, true, nullptr).kind == Kind::none, "no band, no menu " + name);
         }
 
         beginTest ("The dynamics menu floats above the crown, inside the window, with its knobs and sidechain");
@@ -172,8 +198,8 @@ public:
             expectWithinAbsoluteError (l.popupArea.getCentreX(), l.panel.getCentreX(), 1.0e-3f, "centred " + name);
 
             for (int i = 0; i < 3; ++i)
-                expect (l.hit (l.dynamicsKnobs[(size_t) i].getCentre() * l.scale, true, true) == PanelTarget { Kind::knob, ratioKnob + i, true }, name);
-            expect (l.hit (l.sidechain.getCentre() * l.scale, true, true) == PanelTarget { Kind::sidechain, 0, true }, name);
+                expect (l.hit (l.dynamicsKnobs[(size_t) i].getCentre() * l.scale, true, &peak) == PanelTarget { Kind::knob, ratioKnob + i, true }, name);
+            expect (l.hit (l.sidechain.getCentre() * l.scale, true, &peak) == PanelTarget { Kind::sidechain, 0, true }, name);
             expect (! l.sidechain.intersects (l.dynamicsKnobs[2]), name);
         }
     }

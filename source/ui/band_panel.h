@@ -61,8 +61,9 @@ struct BandPanelLayout
     // Window size in component pixels. openAmount: 0 = away below the window, 1 = fully up.
     static BandPanelLayout make (float width, float height, float openAmount, PanelPopup popup);
 
-    // position is in component pixels.
-    PanelTarget hit (juce::Point<float> position, bool open, bool hasBand) const;
+    // position is in component pixels. band: the selected band, or null. Controls
+    // the band doesn't show (a stereo band's position, a cut's gear) never hit.
+    PanelTarget hit (juce::Point<float> position, bool open, const Band* band) const;
 };
 
 // How the view moves as the panel opens, so the sphere starts clear of it. It's

@@ -117,6 +117,8 @@ public:
     // The loudest input sample on a channel (after the input gain) since this
     // was last called, which resets it. For the GUI's meter.
     float takeInputPeak (int channel)    { return inputPeak[(size_t) channel].exchange (0.0f, std::memory_order_relaxed); }
+    // The same for the output, after the output gain.
+    float takeOutputPeak (int channel)   { return outputPeak[(size_t) channel].exchange (0.0f, std::memory_order_relaxed); }
 
     // Whether sound has reached the sidechain input in the last moment: false
     // with the bus off, with nothing routed to it, or once the host stops
@@ -171,9 +173,11 @@ private:
     std::atomic<float>* inputGain = nullptr;                 // dB
     std::atomic<float>* outputGain = nullptr;                // dB
     GainGlide inputLevel { 1.0f }, outputLevel { 1.0f };     // their linear gains, gliding
-    std::array<std::atomic<float>, 2> inputPeak {};
+    using HeldPeaks = std::array<std::atomic<float>, 2>; // per channel, held until the GUI takes them
+    HeldPeaks inputPeak {}, outputPeak {};
 
     static void applyGain (GainGlide&, float db, juce::AudioBuffer<float>&);
+    static void holdPeaks (const juce::AudioBuffer<float>&, HeldPeaks&);
     std::atomic<int> soloBand { -1 };
     std::atomic<double> analysisSampleRate { 48000.0 };
     dsp::SphereEq eq;

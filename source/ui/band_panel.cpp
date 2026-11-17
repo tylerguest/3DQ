@@ -261,7 +261,7 @@ BandPanelLayout BandPanelLayout::make (float windowWidth, float windowHeight, fl
     return l;
 }
 
-PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool hasBand) const
+PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, const Band* band) const
 {
     using Kind = PanelTarget::Kind;
     const auto p = position / scale;
@@ -269,7 +269,7 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
     if (! open)
         return { Kind::none };
 
-    if (hasBand && popup != PanelPopup::none && popupArea.contains (p))
+    if (band != nullptr && popup != PanelPopup::none && popupArea.contains (p))
     {
         if (popup == PanelPopup::types)
         {
@@ -292,17 +292,17 @@ PanelTarget BandPanelLayout::hit (juce::Point<float> position, bool open, bool h
     if (! panelOutline (panel).contains (p))
         return { Kind::none };
 
-    if (hasBand)
+    if (band != nullptr)
     {
         if (previous.contains (p))    return { Kind::previous };
         if (next.contains (p))        return { Kind::next };
         if (typePill.contains (p))    return { Kind::typeMenu };
         if (stereo.contains (p))      return { Kind::stereo, p.x >= stereo.getCentreX() ? 1 : 0 }; // 0 = Mono, 1 = Stereo
-        if (positionPill.contains (p)) return { Kind::knob, posKnob };
+        if (positionPill.contains (p) && knobEnabled (*band, posKnob)) return { Kind::knob, posKnob };
         if (solo.contains (p))        return { Kind::solo };
         if (mute.contains (p))        return { Kind::mute };
         if (remove.contains (p))      return { Kind::remove };
-        if (gear.contains (p))        return { Kind::dynamicsMenu };
+        if (gear.contains (p) && ! band->isCut()) return { Kind::dynamicsMenu };
 
         const float fromGain = p.getDistanceFrom (gainCentre);
         if (fromGain <= gainKnobRadius + 1.0f)
@@ -730,9 +730,10 @@ void drawBandPanel (juce::Graphics& g, const BandPanelLayout& l, float dpr, floa
                 for (int ringKnob : { rangeKnob, thresholdKnob })
                     if (dynamicsUsable && isLit (ringKnob))
                         shown = ringKnob;
-                const float dim = enabled || shown != gainKnob ? 1.0f : 0.32f;
-                caption (shown == gainKnob ? "GAIN" : knobName (*band, shown), { c.x - 40.0f, c.y + 31.0f, 80.0f, 12.0f }, faded (idle.withMultipliedAlpha (dim)));
-                if (dim == 1.0f) // a cut has no gain: just its name, dimmed
+                const bool showValue = enabled || shown != gainKnob; // a cut has no gain: just its name, dimmed
+                caption (shown == gainKnob ? "GAIN" : knobName (*band, shown), { c.x - 40.0f, c.y + 31.0f, 80.0f, 12.0f },
+                         faded (idle.withMultipliedAlpha (showValue ? 1.0f : 0.32f)));
+                if (showValue)
                     text (knobText (*band, shown), { c.x - 40.0f, c.y + 43.0f, 80.0f, 14.0f }, 10.5f, faded (bright));
 
             }
